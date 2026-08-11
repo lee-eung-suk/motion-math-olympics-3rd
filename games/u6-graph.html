@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>그래프 경로 찾기 · 종목 6</title>
+<link rel="stylesheet" href="../css/style.css?v=2">
+</head>
+<body>
+
+<div class="game-stage">
+  <video id="video" playsinline muted style="display:none"></video>
+  <canvas id="gameCanvas"></canvas>
+
+  <div class="hud">
+    <div class="rec" id="recIndicator" style="display:none"><span class="dot"></span>REC</div>
+    <button class="home-btn" id="homeBtn">🏠</button>
+  </div>
+
+  <div class="overlay-panel" id="loadingPanel">
+    <h2>📊 그래프 경로 찾기</h2>
+    <p id="loadingText">준비 중…</p>
+  </div>
+
+  <div class="overlay-panel" id="raisePanel" style="display:none">
+    <div class="raise-icon" id="raiseIcon">🙋</div>
+    <h2 id="raiseText">손을 들어 주세요!</h2>
+    <div class="hold-bar"><div class="hold-fill" id="holdFill"></div></div>
+  </div>
+
+  <div class="overlay-panel ready-flash" id="readyPanel" style="display:none">
+    <h2>✋ 좋아요! 준비됐어요</h2>
+  </div>
+
+  <div class="overlay-panel" id="countdownPanel" style="display:none">
+    <div class="countdown-num" id="countNum">3</div>
+  </div>
+
+  <div class="overlay-panel" id="resultPanel" style="display:none">
+    <h2 id="resultTitle">결과</h2>
+    <div class="medal" id="resultMedal">🥉</div>
+    <div class="result-stats">
+      <div class="stat-box"><div class="num" id="statCount">0개</div><div class="label">기록</div></div>
+      <div class="stat-box"><div class="num" id="statBest">0개</div><div class="label">최고 기록</div></div>
+      <div class="stat-box"><div class="num" id="statCombo">0</div><div class="label">최고 콤보</div></div>
+    </div>
+    <video class="preview" id="previewVideo" controls playsinline style="display:none"></video>
+    <div class="action-row">
+      <button class="ghost-btn" id="savePhotoBtn">📸 사진</button>
+      <button class="ghost-btn" id="saveVideoBtn" style="display:none">🎬 3초 영상</button>
+      <button class="big-btn" id="retryBtn">🔁 한 번 더</button>
+      <button class="ghost-btn" id="homeBtn2">🏠 종목 선택</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import {
+  HighScore, requestWakeLock, SoundKit, FileAudioLoop,
+  HandTracker, ClipRecorder, downloadBlob,
+  drawMirroredVideo, fitCanvasToScreen, isHandRaised, getCursors,
+  AutoDifficulty, levelFromUrl, medalFor,
+  scheduleAutoRecording, ComboShot, drawPhotoOverlay,
+  ScreenShake, spawnPopup, updatePopups, drawPopups,
+  spawnBigPopup, updateBigPopups, drawBigPopups,
+  InputMode, PointerInput, StartGate, drawFallbackBackground,
+  startCamera, formatFileTimestamp, fluidPx, showSoundHint,
+  drawVignette, spawnConfetti, updateConfetti, drawConfetti,
+} from "../js/engine.js?v=2";
+import {
+  CUTE, LANE_COLORS, LANE_DARK, bob, drawSticker, drawStickerRect, drawChunkyText,
+  drawSparkle, spawnSparkles, updateSparkles, drawSparkles, makeDrifters, drawDrifters,
+  drawBunting, drawGloveCursor, drawCuteBanner, drawLevelStars,
+} from "../js/cute.js?v=2";
+requestWakeLock();
+
+const UNIT = "m6";
+const TITLE = "그래프 경로 찾기";
+const RECORD_SUFFIX = "개 도착";
+const MEDALS = { bronze: 4, silver: 7, gold: 10 };
+const mode = InputMode.get();
+
+const video = document.getElementById("video");
+const canvas = document.getElementById("gameCanvas");
+let dims = fitCanvasToScreen(canvas);
+let drifters = makeDrifters(16, dims.w, dims.h);
+window.addEventListener("resize", () => {
+  dims = fitCanvasToScreen(canvas);
+  drifters = makeDrifters(16, dims.w, dims.h);
+  if (state === "playing") layoutPaths();
+});
+
+const sound = new SoundKit();
+const bgm = new FileAudioLoop("../assets/sounds/subbgm.mp3", 0.32);
+const isMuted = () => localStorage.getItem("smo_muted") === "1";
+
+document.getElementById("homeBtn").addEventListener("click", () => { bgm.stop(); location.href = "../index.html"; });
+document.getElementById("homeBtn2").addEventListener("click", () => { bgm.stop(); location.href = "../index.html"; });
+
+function randInt(min, max) { return min + Math.floor(Math.random() * (max - min + 1)); }
+function shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; }
+
+const TOPICS = [
+  { unit: "그루", items: [["사과나무", "🍎"], ["배나무", "🍐"], ["감나무", "🍊"], ["밤나무", "🌰"]] },
+  { unit: "권", items: [["동화책", "📕"], ["과학책", "📗"], ["만화책", "📘"], ["시집", "📙"]] },
+  { unit: "명", items: [["축구", "⚽"], ["농구", "🏀"], ["수영", "🏊"], ["달리기", "🏃"]] },
+  { unit: "개", items: [["딸기맛", "🍓"], ["포도맛", "🍇"], ["레몬맛", "🍋"], ["수박맛", "🍉"]] },
+];
+
+// 3학년 2학기 「그림그래프」 진도: 큰 그림(10)과 작은 그림(1)으로 나타낸 자료 읽기
+function genRound(level) {
+  const topic = TOPICS[Math.floor(Math.random() * TOPICS.length)];
+  const n = level === 1 ? 3 : 4;
+  const picked = shuffle([...topic.items]).slice(0, n);
+
+  const values = [];
+  const used = new Set();
+  while (values.length < n) {
+    const v = randInt(1, 4) * 10 + randInt(1, 9);
+    if (used.has(v)) continue;
+    used.add(v); values.push(v);
+  }
+
+  const rows = picked.map(([name, icon], i) => ({ name, icon, value: values[i] }));
+
+  let question, answerIdx;
+  const maxIdx = rows.reduce((b, r, i) => (r.value > rows[b].value ? i : b), 0);
+  const minIdx = rows.reduce((b, r, i) => (r.value < rows[b].value ? i : b), 0);
+
+  if (level === 1) {
+    question = "가장 많은 것의 길로 가요";
+    answerIdx = maxIdx;
+  } else if (level === 2) {
+    if (Math.random() < 0.5) { question = "가장 적은 것의 길로 가요"; answerIdx = minIdx; }
+    else {
+      answerIdx = randInt(0, n - 1);
+      question = `${rows[answerIdx].value}${topic.unit}인 것의 길로 가요`;
+    }
+  } else {
+    const r = Math.random();
+    if (r < 0.34) {
+      const sorted = [...rows].map((x, i) => ({ i, v: x.value })).sort((a, b) => b.v - a.v);
+      answerIdx = sorted[1].i;
+      question = "두 번째로 많은 것의 길로 가요";
+    } else if (r < 0.67) {
+      answerIdx = randInt(0, n - 1);
+      question = `${rows[answerIdx].value}${topic.unit}인 것의 길로 가요`;
+    } else {
+      answerIdx = maxIdx;
+      const diff = rows[maxIdx].value - rows[minIdx].value;
+      question = `가장 많은 것과 가장 적은 것의 차가 ${diff}${topic.unit} 이에요. 많은 쪽 길로!`;
+    }
+  }
+
+  return { rows, unit: topic.unit, question, answerIdx };
+}
+
+const handTracker = new HandTracker();
+let pointerInput = null;
+
+async function init() {
+  if (!isMuted()) bgm.play(showSoundHint);
+  if (mode === "motion") {
+    try {
+      await startCamera(video, { width: 640, height: 480 });
+      if (!isMuted()) bgm.play(showSoundHint);
+    } catch (e) {
+      document.getElementById("loadingText").textContent = "⚠️ 카메라를 찾을 수 없어요. 카메라 권한을 확인해주세요.";
+      return;
+    }
+    document.getElementById("loadingText").textContent = "AI 모델을 불러오는 중…";
+    await handTracker.init(2);
+  } else {
+    pointerInput = new PointerInput(canvas);
+  }
+  document.getElementById("loadingPanel").style.display = "none";
+  document.getElementById("raiseIcon").textContent = mode === "motion" ? "🙋" : "👆";
+  document.getElementById("raiseText").textContent = mode === "motion" ? "손을 들어 주세요!" : "화면을 터치(클릭)하면 시작!";
+  document.getElementById("raisePanel").style.display = "flex";
+  state = "raise";
+  requestAnimationFrame(loop);
+}
+
+let state = "loading";
+const holdFill = document.getElementById("holdFill");
+const startGate = new StartGate(mode, holdFill);
+
+let autoDiff, count, combo, maxCombo, playEndAt, round, paths, active, progress, strayMs, resolving, roundAt;
+let popups = [], bigPopups = [], confetti = [], sparks = [];
+const shake = new ScreenShake();
+let recorder, comboShot, fallbackShot, autoRec, recordedBlob = null;
+const recIndicator = document.getElementById("recIndicator");
+let cursors = [];
+
+
+
+// 경로는 좌→우로 흐르되 사인파 위상을 달리해 서로 교차시킨다 — 눈으로만 따라가면 헷갈리게
+function layoutPaths() {
+  const { w, h } = dims;
+  const x0 = w * 0.14, x1 = w * 0.90;
+  const yTop = h * 0.52, yBot = h * 0.93;
+  const n = round.rows.length;
+  const STEPS = 90;
+  paths = round.rows.map((row, i) => {
+    const baseY = yTop + ((i + 0.5) / n) * (yBot - yTop);
+    const amp = (yBot - yTop) / n * (0.85 + (i % 2) * 0.5);
+    const phase = i * 1.7;
+    const cycles = 1.5 + (i % 3) * 0.5;
+    const pts = [];
+    for (let s = 0; s <= STEPS; s++) {
+      const t = s / STEPS;
+      const x = x0 + (x1 - x0) * t;
+      const y = baseY + Math.sin(phase + t * Math.PI * 2 * cycles) * amp * Math.sin(Math.PI * t);
+      pts.push({ x, y: Math.max(yTop * 0.98, Math.min(yBot, y)) });
+    }
+    return { pts, color: LANE_COLORS[i % LANE_COLORS.length], row, idx: i };
+  });
+}
+
+function newRound() {
+  round = genRound(autoDiff.level);
+  layoutPaths();
+  active = -1; progress = 0; strayMs = 0;
+  resolving = false;
+  roundAt = performance.now();
+}
+
+function startCountdown() {
+  state = "countdown";
+  document.getElementById("countdownPanel").style.display = "flex";
+  const numEl = document.getElementById("countNum");
+  let n = 3;
+  numEl.textContent = n;
+  if (!isMuted()) sound.countBeep();
+  const iv = setInterval(() => {
+    n--;
+    if (n <= 0) {
+      clearInterval(iv);
+      document.getElementById("countdownPanel").style.display = "none";
+      if (!isMuted()) sound.go();
+      beginPlay();
+    } else {
+      numEl.textContent = n;
+      if (!isMuted()) sound.countBeep();
+    }
+  }, 700);
+}
+
+function beginPlay() {
+  state = "playing";
+  const prev = HighScore.get(UNIT);
+  autoDiff = new AutoDifficulty(levelFromUrl(AutoDifficulty.startLevelFromHighScore(prev)));
+  count = 0; combo = 0; maxCombo = 0;
+  popups = []; bigPopups = []; confetti = []; sparks = [];
+  playEndAt = performance.now() + 60000;
+  newRound();
+
+  recorder = new ClipRecorder(canvas, sound, 24);
+  recorder.prepare();
+  comboShot = new ComboShot(canvas);
+  fallbackShot = new ComboShot(canvas);
+  autoRec = scheduleAutoRecording(recorder, {
+    onStartVisual: () => {
+      recIndicator.style.display = "flex";
+      setTimeout(() => { if (!comboShot.captured) fallbackShot.capture(canvas); }, 1500);
+    },
+    onEndVisual: () => { recIndicator.style.display = "none"; },
+    onDone: (blob) => { recordedBlob = blob; },
+    fallbackMs: 8000,
+  });
+}
+
+function arrived() {
+  if (resolving) return;
+  resolving = true;
+  const p = paths[active].pts[paths[active].pts.length - 1];
+  count++; combo++;
+  if (combo > maxCombo) { maxCombo = combo; comboShot.capture(canvas); }
+  autoDiff.reportCorrect();
+  autoRec.trigger();
+  shake.trigger(7, 160);
+  spawnSparkles(sparks, p.x, p.y, 22, ["#fff", CUTE.sun, CUTE.green]);
+  spawnConfetti(confetti, p.x, p.y, 36);
+  spawnBigPopup(bigPopups, dims.w / 2, dims.h * 0.44, `도착! ${count}개`, CUTE.sun);
+  if (!isMuted()) { sound.success(); if (combo >= 3 && combo % 3 === 0) sound.fever(); }
+  setTimeout(() => { if (state === "playing") newRound(); }, 800);
+}
+
+function wrongStart(p) {
+  if (resolving) return;
+  resolving = true;
+  combo = 0;
+  autoDiff.reportWrong();
+  shake.trigger(3, 140);
+  spawnPopup(popups, p.x, p.y - 32, "그래프를 다시 봐요!", CUTE.red);
+  if (!isMuted()) sound.fizzle();
+  setTimeout(() => { if (state === "playing") newRound(); }, 640);
+}
+
+function endGame() {
+  state = "result";
+  const { medal, label } = medalFor(count, MEDALS);
+  const prev = HighScore.get(UNIT);
+  const best = Math.max(count, prev ? prev.count : 0);
+  if (!prev || count >= prev.count) {
+    HighScore.set(UNIT, { count, bestLevel: autoDiff.level, label: `${medal} ${count}${RECORD_SUFFIX}`, at: Date.now() });
+  }
+  document.getElementById("resultMedal").textContent = medal;
+  document.getElementById("resultTitle").textContent = `${label}! 수고했어요`;
+  document.getElementById("statCount").textContent = count + "개";
+  document.getElementById("statBest").textContent = best + "개";
+  document.getElementById("statCombo").textContent = "🔥" + maxCombo;
+
+  const shot = comboShot.captured ? comboShot : fallbackShot;
+  const previewVideo = document.getElementById("previewVideo");
+  const saveVideoBtn = document.getElementById("saveVideoBtn");
+  if (recordedBlob) {
+    previewVideo.src = URL.createObjectURL(recordedBlob);
+    previewVideo.style.display = "block";
+    saveVideoBtn.style.display = "inline-block";
+  }
+  document.getElementById("savePhotoBtn").onclick = async () => {
+    const blob = await shot.toBlob((c, w, h) => drawPhotoOverlay(c, w, h, { title: TITLE, record: count + RECORD_SUFFIX, medal }));
+    downloadBlob(blob, `수학체육올림픽_그래프경로_${formatFileTimestamp()}.png`);
+  };
+  document.getElementById("saveVideoBtn").onclick = () => {
+    if (recordedBlob) downloadBlob(recordedBlob, `수학체육올림픽_그래프경로_${formatFileTimestamp()}.${recorder.extension}`);
+  };
+  document.getElementById("resultPanel").style.display = "flex";
+  if (!isMuted()) sound.success();
+}
+
+document.getElementById("retryBtn").addEventListener("click", () => {
+  document.getElementById("resultPanel").style.display = "none";
+  document.getElementById("raisePanel").style.display = "flex";
+  startGate.since = 0; startGate.ready = false; holdFill.style.width = "0%";
+  state = "raise";
+});
+
+document.getElementById("raisePanel").addEventListener("click", () => {
+  if (state === "raise" && mode !== "motion") goReady();
+});
+
+// 그림그래프: 큰 그림 1개 = 10, 작은 그림 1개 = 1
+function drawPictograph(ctx) {
+  const { w, h } = dims;
+  const rows = round.rows;
+  const x = w * 0.06, yTop = h * 0.235;
+  const rowH = fluidPx(dims, 30, { min: 21, max: 40 });
+  const big = fluidPx(dims, 22, { min: 15, max: 29 });
+  const small = fluidPx(dims, 12, { min: 8, max: 16 });
+  const boxW = Math.min(w * 0.62, fluidPx(dims, 430, { min: 260, max: 560 }));
+  const boxH = rowH * rows.length + fluidPx(dims, 26, { min: 18, max: 34 });
+
+  drawStickerRect(ctx, x + boxW / 2, yTop + boxH / 2, boxW, boxH, 20, CUTE.cream, { lineWidth: 5, drop: 6 });
+  ctx.save();
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = CUTE.ink;
+  ctx.textAlign = "left";
+  ctx.font = `900 ${fluidPx(dims, 13, { min: 9, max: 17 })}px sans-serif`;
+  ctx.fillText(`● = 10${round.unit}   ○ = 1${round.unit}`, x + 12, yTop + fluidPx(dims, 14, { min: 10, max: 19 }));
+
+  rows.forEach((r, i) => {
+    const y = yTop + fluidPx(dims, 26, { min: 18, max: 34 }) + rowH * i + rowH / 2;
+    ctx.fillStyle = LANE_COLORS[i % LANE_COLORS.length];
+    ctx.beginPath(); ctx.arc(x + 16, y, 6, 0, Math.PI * 2); ctx.fill();
+
+    ctx.fillStyle = CUTE.ink;
+    ctx.font = `900 ${fluidPx(dims, 15, { min: 11, max: 20 })}px sans-serif`;
+    ctx.fillText(`${r.icon} ${r.name}`, x + 28, y);
+
+    let gx = x + fluidPx(dims, 130, { min: 92, max: 168 });
+    const tens = Math.floor(r.value / 10), ones = r.value % 10;
+    for (let t = 0; t < tens; t++) {
+      ctx.beginPath(); ctx.arc(gx, y, big / 2, 0, Math.PI * 2);
+      ctx.fillStyle = LANE_COLORS[i % LANE_COLORS.length]; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = CUTE.ink; ctx.stroke();
+      gx += big + 3;
+    }
+    gx += 4;
+    for (let o = 0; o < ones; o++) {
+      ctx.beginPath(); ctx.arc(gx, y, small / 2, 0, Math.PI * 2);
+      ctx.fillStyle = "#ffffff"; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = CUTE.ink; ctx.stroke();
+      gx += small + 2;
+    }
+  });
+  ctx.restore();
+}
+
+function loop(tsMs) {
+  requestAnimationFrame(loop);
+  if (mode === "motion" && video.readyState < 2) return;
+  const { ctx, w, h } = dims;
+  ctx.save();
+  shake.apply(ctx);
+  if (mode === "motion") drawMirroredVideo(ctx, video, w, h);
+  else drawFallbackBackground(ctx, w, h);
+  drawDrifters(ctx, drifters, dims, 1 / 60);
+  drawBunting(ctx, dims);
+
+  let result = null;
+  if (mode === "motion") {
+    result = handTracker.detect(video, tsMs);
+    if (state === "raise") {
+      let raised = false;
+      if (result && result.landmarks) for (const lm of result.landmarks) if (isHandRaised(lm)) raised = true;
+      if (startGate.update(tsMs, raised)) goReady();
+    }
+  }
+  cursors = getCursors(mode, result, w, h, video, pointerInput);
+
+  if (state === "playing") stepGame();
+
+  for (const c of cursors) drawGloveCursor(ctx, c.x, c.y, fluidPx(dims, 44, { min: 32, max: 62 }), { active: active !== -1 });
+  ctx.restore();
+}
+
+function goReady() {
+  state = "ready";
+  document.getElementById("raisePanel").style.display = "none";
+  document.getElementById("readyPanel").style.display = "flex";
+  if (!isMuted()) sound.click();
+  setTimeout(() => {
+    document.getElementById("readyPanel").style.display = "none";
+    startCountdown();
+  }, 500);
+}
+
+function stepGame() {
+  const { ctx, w, h } = dims;
+  const dt = 1 / 60;
+  const remain = Math.max(0, playEndAt - performance.now());
+  if (remain <= 0) { endGame(); return; }
+
+  const nodeR = fluidPx(dims, 26, { min: 19, max: 36 });
+  const tol = fluidPx(dims, 46, { min: 32, max: 64 }) * (autoDiff.level === 3 ? 0.78 : 1);
+
+  drawPictograph(ctx);
+
+  // 새 문제가 뜬 직후엔 잠깐 입력을 받지 않는다 — 손이 우연히 노드 위에 있었다고
+  // 문제를 읽어보기도 전에 오답 처리되면 아이 입장에서는 억울하다
+  const armed = performance.now() - roundAt > 550;
+
+  // 출발 노드를 고르기 전: 어느 길로 갈지 결정하는 단계
+  if (armed && !resolving && active === -1) {
+    outer:
+    for (const c of cursors) {
+      for (const p of paths) {
+        const s = p.pts[0];
+        if (Math.hypot(c.x - s.x, c.y - s.y) < nodeR * 1.25) {
+          if (p.idx === round.answerIdx) {
+            active = p.idx; progress = 0; strayMs = 0;
+            if (!isMuted()) sound.click();
+          } else {
+            wrongStart(s);
+          }
+          break outer;
+        }
+      }
+    }
+  } else if (!resolving && active !== -1) {
+    // 추적 단계: 손이 지금 지점 근처면 앞으로 나아간다. 한 프레임에 몇 칸까지만 —
+    // 교차점에서 다른 길로 건너뛰어 지름길을 타는 걸 막는다.
+    const pts = paths[active].pts;
+    let advanced = false;
+    for (const c of cursors) {
+      const maxJump = 4;
+      for (let k = Math.min(progress + maxJump, pts.length - 1); k > progress; k--) {
+        if (Math.hypot(c.x - pts[k].x, c.y - pts[k].y) < tol) { progress = k; advanced = true; break; }
+      }
+      if (!advanced && Math.hypot(c.x - pts[progress].x, c.y - pts[progress].y) < tol) advanced = true;
+    }
+    if (advanced) strayMs = 0;
+    else {
+      strayMs += dt * 1000;
+      // 손을 놓친 채 오래 있으면 출발점으로 되돌린다 (실패가 아니라 다시 도전)
+      if (strayMs > 900) { progress = 0; strayMs = 0; spawnPopup(popups, pts[0].x, pts[0].y - 30, "길을 벗어났어요", CUTE.sun); }
+    }
+    if (progress >= pts.length - 1) { arrived(); return; }
+  }
+
+  // 길 그리기
+  for (const p of paths) {
+    const isActive = p.idx === active;
+    ctx.save();
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.globalAlpha = active === -1 || isActive ? 1 : 0.28;
+    ctx.strokeStyle = "rgba(29,43,77,0.55)";
+    ctx.lineWidth = fluidPx(dims, 18, { min: 12, max: 26 });
+    ctx.beginPath();
+    p.pts.forEach((pt, i) => (i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y)));
+    ctx.stroke();
+    ctx.strokeStyle = p.color;
+    ctx.lineWidth = fluidPx(dims, 11, { min: 7, max: 17 });
+    ctx.setLineDash(isActive ? [] : [14, 10]);
+    ctx.beginPath();
+    p.pts.forEach((pt, i) => (i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y)));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    // 출발 노드 — 아직 안 골랐으면 통통 튀면서 "여기를 짚어!"라고 알린다
+    const s = p.pts[0], e = p.pts[p.pts.length - 1];
+    const sy = active === -1 ? bob(1.5, nodeR * 0.13, p.idx * 1.4) : 0;
+    drawSticker(ctx, s.x, s.y + sy, nodeR, p.color, { lineWidth: Math.max(3.5, nodeR * 0.16) });
+    drawSticker(ctx, s.x, s.y + sy, nodeR * 0.72, CUTE.cream, { lineWidth: 2.5, gloss: false, drop: 0 });
+    ctx.save();
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = `${nodeR * 0.86}px sans-serif`;
+    ctx.fillText(p.row.icon, s.x, s.y + sy);
+    ctx.restore();
+
+    // 도착 노드
+    drawSticker(ctx, e.x, e.y, nodeR * 0.95, isActive ? CUTE.sun : "rgba(255,253,243,0.8)", { lineWidth: Math.max(3.5, nodeR * 0.15) });
+    ctx.save();
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = `${nodeR * 0.86}px sans-serif`;
+    ctx.fillText("🏁", e.x, e.y);
+    ctx.restore();
+  }
+
+  // 진행한 만큼 굵게 덧칠 + 러너 위치
+  if (active !== -1) {
+    const pts = paths[active].pts;
+    ctx.save();
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.strokeStyle = CUTE.sun;
+    ctx.lineWidth = fluidPx(dims, 13, { min: 9, max: 20 });
+    ctx.beginPath();
+    for (let i = 0; i <= progress; i++) (i === 0 ? ctx.moveTo(pts[i].x, pts[i].y) : ctx.lineTo(pts[i].x, pts[i].y));
+    ctx.stroke();
+    const cur = pts[progress];
+    ctx.font = `${fluidPx(dims, 32, { min: 22, max: 44 })}px sans-serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("🏃", cur.x, cur.y);
+    ctx.restore();
+  }
+
+  sparks = updateSparkles(sparks, dt);
+  drawSparkles(ctx, sparks);
+  confetti = updateConfetti(confetti, dt);
+  drawConfetti(ctx, confetti);
+  popups = updatePopups(popups, dt);
+  drawPopups(ctx, popups);
+  bigPopups = updateBigPopups(bigPopups, dt);
+  drawBigPopups(ctx, bigPopups);
+
+  drawVignette(ctx, w, h, 0.18);
+  const pct = active === -1 ? 0 : Math.round((progress / (paths[active].pts.length - 1)) * 100);
+  drawCuteBanner(ctx, dims, [
+    { text: round.question, size: 28, chunky: true, color: CUTE.sun },
+    { text: `🏁 ${pct}%   🔥 ${combo}   🏅 ${count}개   ⏱ ${Math.ceil(remain / 1000)}초`, size: 18, color: CUTE.orangeDark },
+    { text: active === -1
+        ? (mode === "motion" ? "정답 그림의 출발점을 손으로 짚어요!" : "정답 그림의 출발점을 탭!")
+        : (mode === "motion" ? "길을 벗어나지 말고 끝까지 손으로 따라가요!" : "길을 따라 드래그!"),
+      size: 14, weight: "700", color: "#5c6b8a" },
+  ], fluidPx);
+
+  drawLevelStars(ctx, dims, autoDiff.level, fluidPx);
+}
+
+init();
+</script>
+</body>
+</html>

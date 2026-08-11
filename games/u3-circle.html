@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>굴렁쇠 원 코스 · 종목 3</title>
+<link rel="stylesheet" href="../css/style.css?v=2">
+</head>
+<body>
+
+<div class="game-stage">
+  <video id="video" playsinline muted style="display:none"></video>
+  <canvas id="gameCanvas"></canvas>
+
+  <div class="hud">
+    <div class="rec" id="recIndicator" style="display:none"><span class="dot"></span>REC</div>
+    <button class="home-btn" id="homeBtn">🏠</button>
+  </div>
+
+  <div class="overlay-panel" id="loadingPanel">
+    <h2>🎯 굴렁쇠 원 코스</h2>
+    <p id="loadingText">준비 중…</p>
+  </div>
+
+  <div class="overlay-panel" id="raisePanel" style="display:none">
+    <div class="raise-icon" id="raiseIcon">🙋</div>
+    <h2 id="raiseText">손을 들어 주세요!</h2>
+    <div class="hold-bar"><div class="hold-fill" id="holdFill"></div></div>
+  </div>
+
+  <div class="overlay-panel ready-flash" id="readyPanel" style="display:none">
+    <h2>✋ 좋아요! 준비됐어요</h2>
+  </div>
+
+  <div class="overlay-panel" id="countdownPanel" style="display:none">
+    <div class="countdown-num" id="countNum">3</div>
+  </div>
+
+  <div class="overlay-panel" id="resultPanel" style="display:none">
+    <h2 id="resultTitle">결과</h2>
+    <div class="medal" id="resultMedal">🥉</div>
+    <div class="result-stats">
+      <div class="stat-box"><div class="num" id="statCount">0코스</div><div class="label">기록</div></div>
+      <div class="stat-box"><div class="num" id="statBest">0코스</div><div class="label">최고 기록</div></div>
+      <div class="stat-box"><div class="num" id="statCombo">0</div><div class="label">최고 콤보</div></div>
+    </div>
+    <video class="preview" id="previewVideo" controls playsinline style="display:none"></video>
+    <div class="action-row">
+      <button class="ghost-btn" id="savePhotoBtn">📸 사진</button>
+      <button class="ghost-btn" id="saveVideoBtn" style="display:none">🎬 3초 영상</button>
+      <button class="big-btn" id="retryBtn">🔁 한 번 더</button>
+      <button class="ghost-btn" id="homeBtn2">🏠 종목 선택</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import {
+  HighScore, requestWakeLock, SoundKit, FileAudioLoop,
+  HandTracker, ClipRecorder, downloadBlob,
+  drawMirroredVideo, fitCanvasToScreen, isHandRaised, getCursors,
+  AutoDifficulty, levelFromUrl, medalFor,
+  scheduleAutoRecording, ComboShot, drawPhotoOverlay,
+  ScreenShake, spawnPopup, updatePopups, drawPopups,
+  spawnBigPopup, updateBigPopups, drawBigPopups,
+  InputMode, PointerInput, StartGate, drawFallbackBackground,
+  startCamera, formatFileTimestamp, fluidPx, showSoundHint,
+  drawVignette, spawnConfetti, updateConfetti, drawConfetti,
+} from "../js/engine.js?v=2";
+import {
+  CUTE, LANE_COLORS, bob, drawSticker, drawChunkyText, drawSparkle,
+  spawnSparkles, updateSparkles, drawSparkles, makeDrifters, drawDrifters,
+  drawBunting, drawGloveCursor, drawCuteBanner, drawPips, drawLevelStars,
+} from "../js/cute.js?v=2";
+requestWakeLock();
+
+const UNIT = "m3";
+const TITLE = "굴렁쇠 원 코스";
+const RECORD_SUFFIX = "코스 완주";
+const MEDALS = { bronze: 3, silver: 6, gold: 9 };
+const mode = InputMode.get();
+const TWO_PI = Math.PI * 2;
+
+const video = document.getElementById("video");
+const canvas = document.getElementById("gameCanvas");
+let dims = fitCanvasToScreen(canvas);
+let drifters = makeDrifters(16, dims.w, dims.h);
+window.addEventListener("resize", () => { dims = fitCanvasToScreen(canvas); drifters = makeDrifters(16, dims.w, dims.h); });
+
+const sound = new SoundKit();
+const bgm = new FileAudioLoop("../assets/sounds/subbgm.mp3", 0.32);
+const isMuted = () => localStorage.getItem("smo_muted") === "1";
+
+document.getElementById("homeBtn").addEventListener("click", () => { bgm.stop(); location.href = "../index.html"; });
+document.getElementById("homeBtn2").addEventListener("click", () => { bgm.stop(); location.href = "../index.html"; });
+
+function randInt(min, max) { return min + Math.floor(Math.random() * (max - min + 1)); }
+function shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; }
+
+// 3학년 2학기 「원」 진도: 원의 중심·반지름·지름, 지름 = 반지름 × 2
+// 한 코스는 굴렁쇠 구간 여러 개로 이루어지고, 구간마다 조건에 맞는 크기의 굴렁쇠를 골라 한 바퀴 돌아야 한다.
+// 굴렁쇠끼리 몇 칸 떨어져 있느냐가 곧 난이도다.
+// 1단계는 2칸씩 벌려 한눈에 구분되고, 3단계는 1칸 간격으로 촘촘해 정밀하게 골라야 한다.
+const RING_SETS = {
+  1: [[2, 4, 6], [2, 4, 6], [3, 5, 7]],
+  2: [[2, 3, 5], [3, 4, 6], [2, 4, 5], [3, 5, 6]],
+  3: [[2, 3, 4, 5], [3, 4, 5, 6], [2, 3, 4, 6]],
+};
+
+function genCourse(level) {
+  const stageCount = level === 1 ? 1 : level === 2 ? 2 : 3;
+  const stages = [];
+  for (let s = 0; s < stageCount; s++) {
+    const sets = RING_SETS[level];
+    const pool = [...sets[randInt(0, sets.length - 1)]];
+    const answer = pool[randInt(0, pool.length - 1)];
+    // 레벨이 오르면 "지름"으로 물어 반지름을 스스로 구하게 한다
+    const askDiameter = level === 1 ? false : level === 2 ? Math.random() < 0.5 : Math.random() < 0.65;
+    stages.push({
+      radii: pool, answer,
+      label: askDiameter ? `지름 ${answer * 2}칸` : `반지름 ${answer}칸`,
+      hint: askDiameter ? "지름 = 반지름 × 2" : "반지름 = 가운데 점에서 원까지",
+    });
+  }
+  return stages;
+}
+
+const handTracker = new HandTracker();
+let pointerInput = null;
+
+async function init() {
+  if (!isMuted()) bgm.play(showSoundHint);
+  if (mode === "motion") {
+    try {
+      await startCamera(video, { width: 640, height: 480 });
+      if (!isMuted()) bgm.play(showSoundHint);
+    } catch (e) {
+      document.getElementById("loadingText").textContent = "⚠️ 카메라를 찾을 수 없어요. 카메라 권한을 확인해주세요.";
+      return;
+    }
+    document.getElementById("loadingText").textContent = "AI 모델을 불러오는 중…";
+    await handTracker.init(2);
+  } else {
+    pointerInput = new PointerInput(canvas);
+  }
+  document.getElementById("loadingPanel").style.display = "none";
+  document.getElementById("raiseIcon").textContent = mode === "motion" ? "🙋" : "👆";
+  document.getElementById("raiseText").textContent = mode === "motion" ? "손을 들어 주세요!" : "화면을 터치(클릭)하면 시작!";
+  document.getElementById("raisePanel").style.display = "flex";
+  state = "raise";
+  requestAnimationFrame(loop);
+}
+
+let state = "loading";
+const holdFill = document.getElementById("holdFill");
+const startGate = new StartGate(mode, holdFill);
+
+let autoDiff, count, combo, maxCombo, playEndAt;
+let course, stageIdx, rings, resolving, roundAt, wrongFlashUntil = 0, hoopAngle = 0;
+let popups = [], bigPopups = [], confetti = [], sparks = [];
+const shake = new ScreenShake();
+let recorder, comboShot, fallbackShot, autoRec, recordedBlob = null;
+const recIndicator = document.getElementById("recIndicator");
+let cursors = [];
+
+function center() { return { cx: dims.w * 0.5, cy: dims.h * 0.60 }; }
+function cellPx() { return Math.min(dims.w, dims.h) * 0.052; }
+// 굴렁쇠가 최소 1칸 간격이므로 잡히는 범위(반두께)는 반칸보다 충분히 작아야
+// 어느 굴렁쇠를 돌고 있는지 헷갈리지 않는다
+function tolerance() { return cellPx() * (autoDiff.level === 1 ? 0.34 : autoDiff.level === 2 ? 0.30 : 0.26); }
+
+function buildStage() {
+  const st = course[stageIdx];
+  rings = st.radii.map((cells, i) => ({
+    cells, correct: cells === st.answer,
+    color: LANE_COLORS[i % LANE_COLORS.length],
+    acc: 0, lastAng: null, startAng: 0,
+  }));
+  roundAt = performance.now();
+}
+
+function newCourse() {
+  course = genCourse(autoDiff.level);
+  stageIdx = 0;
+  buildStage();
+  resolving = false;
+}
+
+function startCountdown() {
+  state = "countdown";
+  document.getElementById("countdownPanel").style.display = "flex";
+  const numEl = document.getElementById("countNum");
+  let n = 3;
+  numEl.textContent = n;
+  if (!isMuted()) sound.countBeep();
+  const iv = setInterval(() => {
+    n--;
+    if (n <= 0) {
+      clearInterval(iv);
+      document.getElementById("countdownPanel").style.display = "none";
+      if (!isMuted()) sound.go();
+      beginPlay();
+    } else {
+      numEl.textContent = n;
+      if (!isMuted()) sound.countBeep();
+    }
+  }, 700);
+}
+
+function beginPlay() {
+  state = "playing";
+  const prev = HighScore.get(UNIT);
+  autoDiff = new AutoDifficulty(levelFromUrl(AutoDifficulty.startLevelFromHighScore(prev)));
+  count = 0; combo = 0; maxCombo = 0;
+  popups = []; bigPopups = []; confetti = []; sparks = [];
+  playEndAt = performance.now() + 60000;
+  newCourse();
+
+  recorder = new ClipRecorder(canvas, sound, 24);
+  recorder.prepare();
+  comboShot = new ComboShot(canvas);
+  fallbackShot = new ComboShot(canvas);
+  autoRec = scheduleAutoRecording(recorder, {
+    onStartVisual: () => {
+      recIndicator.style.display = "flex";
+      setTimeout(() => { if (!comboShot.captured) fallbackShot.capture(canvas); }, 1500);
+    },
+    onEndVisual: () => { recIndicator.style.display = "none"; },
+    onDone: (blob) => { recordedBlob = blob; },
+    fallbackMs: 8000,
+  });
+}
+
+function stageCleared() {
+  const { cx, cy } = center();
+  if (!isMuted()) sound.pop();
+  spawnSparkles(sparks, cx, cy, 16, ["#fff", CUTE.sun, CUTE.green]);
+  if (stageIdx < course.length - 1) {
+    // 다음 굴렁쇠 구간으로 이어달리기
+    stageIdx++;
+    spawnPopup(popups, cx, cy - cellPx() * 2, `${stageIdx + 1}번 굴렁쇠로!`, CUTE.green);
+    buildStage();
+    return;
+  }
+  resolving = true;
+  count++; combo++;
+  if (combo > maxCombo) { maxCombo = combo; comboShot.capture(canvas); }
+  autoDiff.reportCorrect();
+  autoRec.trigger();
+  shake.trigger(8, 170);
+  spawnConfetti(confetti, cx, cy, 40);
+  spawnSparkles(sparks, cx, cy, 22);
+  spawnBigPopup(bigPopups, cx, dims.h * 0.42, `${count}코스 완주!`, CUTE.sun);
+  if (!isMuted()) { sound.success(); if (combo >= 3 && combo % 3 === 0) sound.fever(); }
+  setTimeout(() => { if (state === "playing") newCourse(); }, 820);
+}
+
+function wrongRing(ring) {
+  if (resolving) return;
+  resolving = true;
+  combo = 0;
+  autoDiff.reportWrong();
+  shake.trigger(4, 150);
+  wrongFlashUntil = performance.now() + 500;
+  const { cx, cy } = center();
+  spawnPopup(popups, cx, cy - cellPx() * 2, `${ring.cells}칸은 아니야!`, CUTE.red);
+  if (!isMuted()) sound.fizzle();
+  setTimeout(() => { if (state === "playing") newCourse(); }, 700);
+}
+
+function endGame() {
+  state = "result";
+  const { medal, label } = medalFor(count, MEDALS);
+  const prev = HighScore.get(UNIT);
+  const best = Math.max(count, prev ? prev.count : 0);
+  if (!prev || count >= prev.count) {
+    HighScore.set(UNIT, { count, bestLevel: autoDiff.level, label: `${medal} ${count}${RECORD_SUFFIX}`, at: Date.now() });
+  }
+  document.getElementById("resultMedal").textContent = medal;
+  document.getElementById("resultTitle").textContent = `${label}! 수고했어요`;
+  document.getElementById("statCount").textContent = count + "코스";
+  document.getElementById("statBest").textContent = best + "코스";
+  document.getElementById("statCombo").textContent = "🔥" + maxCombo;
+
+  const shot = comboShot.captured ? comboShot : fallbackShot;
+  const previewVideo = document.getElementById("previewVideo");
+  const saveVideoBtn = document.getElementById("saveVideoBtn");
+  if (recordedBlob) {
+    previewVideo.src = URL.createObjectURL(recordedBlob);
+    previewVideo.style.display = "block";
+    saveVideoBtn.style.display = "inline-block";
+  }
+  document.getElementById("savePhotoBtn").onclick = async () => {
+    const blob = await shot.toBlob((c, w, h) => drawPhotoOverlay(c, w, h, { title: TITLE, record: count + RECORD_SUFFIX, medal }));
+    downloadBlob(blob, `수학체육올림픽_굴렁쇠원코스_${formatFileTimestamp()}.png`);
+  };
+  document.getElementById("saveVideoBtn").onclick = () => {
+    if (recordedBlob) downloadBlob(recordedBlob, `수학체육올림픽_굴렁쇠원코스_${formatFileTimestamp()}.${recorder.extension}`);
+  };
+  document.getElementById("resultPanel").style.display = "flex";
+  if (!isMuted()) sound.success();
+}
+
+document.getElementById("retryBtn").addEventListener("click", () => {
+  document.getElementById("resultPanel").style.display = "none";
+  document.getElementById("raisePanel").style.display = "flex";
+  startGate.since = 0; startGate.ready = false; holdFill.style.width = "0%";
+  state = "raise";
+});
+
+document.getElementById("raisePanel").addEventListener("click", () => {
+  if (state === "raise" && mode !== "motion") goReady();
+});
+
+// 모눈: "몇 칸"이라는 말이 눈에 보여야 반지름을 가늠할 수 있다
+function drawGrid(ctx, cx, cy, cell) {
+  const { w, h } = dims;
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.15)";
+  ctx.lineWidth = 1;
+  for (let i = -14; i <= 14; i++) {
+    const x = cx + i * cell, y = cy + i * cell;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function loop(tsMs) {
+  requestAnimationFrame(loop);
+  if (mode === "motion" && video.readyState < 2) return;
+  const { ctx, w, h } = dims;
+  ctx.save();
+  shake.apply(ctx);
+  if (mode === "motion") drawMirroredVideo(ctx, video, w, h);
+  else drawFallbackBackground(ctx, w, h);
+  drawDrifters(ctx, drifters, dims, 1 / 60);
+  drawBunting(ctx, dims);
+
+  let result = null;
+  if (mode === "motion") {
+    result = handTracker.detect(video, tsMs);
+    if (state === "raise") {
+      let raised = false;
+      if (result && result.landmarks) for (const lm of result.landmarks) if (isHandRaised(lm)) raised = true;
+      if (startGate.update(tsMs, raised)) goReady();
+    }
+  }
+  cursors = getCursors(mode, result, w, h, video, pointerInput);
+
+  if (state === "playing") stepGame();
+
+  for (const c of cursors) drawGloveCursor(ctx, c.x, c.y, fluidPx(dims, 44, { min: 32, max: 62 }), { active: c.onTrack });
+  ctx.restore();
+}
+
+function goReady() {
+  state = "ready";
+  document.getElementById("raisePanel").style.display = "none";
+  document.getElementById("readyPanel").style.display = "flex";
+  if (!isMuted()) sound.click();
+  setTimeout(() => {
+    document.getElementById("readyPanel").style.display = "none";
+    startCountdown();
+  }, 500);
+}
+
+function stepGame() {
+  const { ctx, w, h } = dims;
+  const dt = 1 / 60;
+  const remain = Math.max(0, playEndAt - performance.now());
+  if (remain <= 0) { endGame(); return; }
+
+  const { cx, cy } = center();
+  const cell = cellPx();
+  const tol = tolerance();
+  const stage = course[stageIdx];
+  // 새 구간 직후엔 잠깐 입력을 받지 않는다 — 손이 우연히 어느 굴렁쇠 위에 있었다고
+  // 문제를 읽어보기도 전에 오답 처리되면 억울하다
+  const armed = performance.now() - roundAt > 550;
+
+  drawGrid(ctx, cx, cy, cell);
+
+  // 손이 어느 굴렁쇠 띠 위에 있는지 판정하고, 그 굴렁쇠의 누적 회전각을 쌓는다.
+  // 누적각은 부호가 있어서 왔다갔다 하면 서로 상쇄된다 = 한 방향으로 꾸준히 돌아야 한 바퀴가 된다.
+  let activeRing = null, activeCursor = null;
+  if (!resolving && armed) {
+    for (const c of cursors) {
+      const d = Math.hypot(c.x - cx, c.y - cy);
+      let hit = null;
+      for (const r of rings) if (Math.abs(d - r.cells * cell) <= tol) { hit = r; break; }
+      if (!hit) continue;
+      c.onTrack = true;
+      activeRing = hit; activeCursor = c;
+      const ang = Math.atan2(c.y - cy, c.x - cx);
+      if (hit.lastAng === null) { hit.lastAng = ang; hit.startAng = ang; }
+      else {
+        let d2 = ang - hit.lastAng;
+        while (d2 > Math.PI) d2 -= TWO_PI;
+        while (d2 < -Math.PI) d2 += TWO_PI;
+        if (Math.abs(d2) < 1.0) hit.acc += d2;   // 순간이동 같은 큰 점프는 무시
+        hit.lastAng = ang;
+      }
+      break;
+    }
+    // 띠를 벗어난 굴렁쇠는 시작 각도를 잊는다 (진행도는 남겨 둬서 다시 붙으면 이어서 돈다)
+    for (const r of rings) if (r !== activeRing) r.lastAng = null;
+
+    for (const r of rings) {
+      if (Math.abs(r.acc) >= TWO_PI - 0.05) {
+        if (r.correct) stageCleared(); else wrongRing(r);
+        break;
+      }
+    }
+  }
+
+  // 굴렁쇠들 — 정답/오답 구분 없이 똑같이 그려야 스스로 판단하게 된다.
+  // 잡히는 범위는 옅게만 깔고, 눈에 보이는 굴렁쇠는 가늘게 그려야 서로 뚜렷이 구분된다.
+  const hoopW = Math.max(7, cell * 0.20);
+  for (const r of rings) {
+    const R = r.cells * cell;
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, TWO_PI);
+    ctx.strokeStyle = r === activeRing ? "rgba(255,255,255,0.26)" : "rgba(255,255,255,0.10)";
+    ctx.lineWidth = tol * 2;
+    ctx.stroke();
+
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, TWO_PI);
+    ctx.strokeStyle = "rgba(34,48,92,0.85)";
+    ctx.lineWidth = hoopW + 4;
+    ctx.stroke();
+
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, TWO_PI);
+    ctx.strokeStyle = r === activeRing ? "#ffffff" : "rgba(255,255,255,0.72)";
+    ctx.lineWidth = hoopW;
+    ctx.setLineDash(r === activeRing ? [] : [hoopW * 2.2, hoopW * 1.6]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    // 돈 만큼 색이 찬다
+    if (Math.abs(r.acc) > 0.02) {
+      const from = r.startAng;
+      const to = r.startAng + r.acc;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, Math.min(from, to), Math.max(from, to));
+      ctx.strokeStyle = r.color;
+      ctx.lineWidth = hoopW;
+      ctx.lineCap = "round";
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // 굴렁쇠 크기 표찰
+    const lx = cx + Math.cos(-Math.PI / 4) * R;
+    const ly = cy + Math.sin(-Math.PI / 4) * R;
+    drawSticker(ctx, lx, ly, fluidPx(dims, 17, { min: 12, max: 23 }), r.color, { lineWidth: 3, drop: 3 });
+    drawChunkyText(ctx, String(r.cells), lx, ly, fluidPx(dims, 17, { min: 12, max: 22 }), "#fff", { outlineWidth: 4 });
+  }
+
+  // 중심점 + 반지름 자
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.8)";
+  ctx.setLineDash([8, 8]); ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + stage.answer * cell, cy); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+  for (let i = 1; i <= stage.answer; i++) {
+    drawSparkle(ctx, cx + i * cell, cy, fluidPx(dims, 7, { min: 5, max: 10 }), "rgba(255,255,255,0.85)", 0.4);
+  }
+  drawSticker(ctx, cx, cy, fluidPx(dims, 13, { min: 9, max: 18 }), CUTE.red, { lineWidth: 3.5, drop: 3 });
+
+  // 굴렁쇠를 굴리는 친구 — 지금 어느 위치를 돌고 있는지 보여준다
+  if (activeRing && activeCursor) {
+    hoopAngle = Math.atan2(activeCursor.y - cy, activeCursor.x - cx);
+    const R = activeRing.cells * cell;
+    const hx = cx + Math.cos(hoopAngle) * R, hy = cy + Math.sin(hoopAngle) * R;
+    ctx.save();
+    ctx.font = `${fluidPx(dims, 34, { min: 24, max: 48 })}px sans-serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("🤸", hx, hy + bob(2, 3));
+    ctx.restore();
+  }
+
+  if (performance.now() < wrongFlashUntil) {
+    ctx.save();
+    ctx.fillStyle = "rgba(255,107,107,0.18)";
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+  }
+
+  confetti = updateConfetti(confetti, dt);
+  drawConfetti(ctx, confetti);
+  sparks = updateSparkles(sparks, dt);
+  drawSparkles(ctx, sparks);
+  popups = updatePopups(popups, dt);
+  drawPopups(ctx, popups);
+  bigPopups = updateBigPopups(bigPopups, dt);
+  drawBigPopups(ctx, bigPopups);
+
+  drawVignette(ctx, w, h, 0.2);
+
+  const laps = activeRing ? Math.min(1, Math.abs(activeRing.acc) / TWO_PI) : 0;
+  drawCuteBanner(ctx, dims, [
+    { text: `${stageIdx + 1}번 굴렁쇠 · ${stage.label}`, size: 34, chunky: true, color: CUTE.sun },
+    { text: `🌀 ${Math.round(laps * 100)}%   🔥 ${combo}   🏅 ${count}코스   ⏱ ${Math.ceil(remain / 1000)}초`, size: 18, color: CUTE.orangeDark },
+    { text: `${stage.hint} · ${mode === "motion" ? "맞는 굴렁쇠 위를 손으로 한 바퀴!" : "맞는 굴렁쇠 위를 드래그로 한 바퀴!"}`, size: 14, weight: "700", color: "#5c6b8a" },
+  ], fluidPx);
+
+  drawPips(ctx, dims, w / 2, h - fluidPx(dims, 26, { min: 18, max: 36 }), course.length, stageIdx, fluidPx);
+  drawLevelStars(ctx, dims, autoDiff.level, fluidPx);
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>분수 조각 모으기 · 종목 4</title>
+<link rel="stylesheet" href="../css/style.css?v=2">
+</head>
+<body>
+
+<div class="game-stage">
+  <video id="video" playsinline muted style="display:none"></video>
+  <canvas id="gameCanvas"></canvas>
+
+  <div class="hud">
+    <div class="rec" id="recIndicator" style="display:none"><span class="dot"></span>REC</div>
+    <button class="home-btn" id="homeBtn">🏠</button>
+  </div>
+
+  <div class="overlay-panel" id="loadingPanel">
+    <h2>🍕 분수 조각 모으기</h2>
+    <p id="loadingText">준비 중…</p>
+  </div>
+
+  <div class="overlay-panel" id="raisePanel" style="display:none">
+    <div class="raise-icon" id="raiseIcon">🙋</div>
+    <h2 id="raiseText">손을 들어 주세요!</h2>
+    <div class="hold-bar"><div class="hold-fill" id="holdFill"></div></div>
+  </div>
+
+  <div class="overlay-panel ready-flash" id="readyPanel" style="display:none">
+    <h2>✋ 좋아요! 준비됐어요</h2>
+  </div>
+
+  <div class="overlay-panel" id="countdownPanel" style="display:none">
+    <div class="countdown-num" id="countNum">3</div>
+  </div>
+
+  <div class="overlay-panel" id="resultPanel" style="display:none">
+    <h2 id="resultTitle">결과</h2>
+    <div class="medal" id="resultMedal">🥉</div>
+    <div class="result-stats">
+      <div class="stat-box"><div class="num" id="statCount">0판</div><div class="label">기록</div></div>
+      <div class="stat-box"><div class="num" id="statBest">0판</div><div class="label">최고 기록</div></div>
+      <div class="stat-box"><div class="num" id="statCombo">0</div><div class="label">최고 콤보</div></div>
+    </div>
+    <video class="preview" id="previewVideo" controls playsinline style="display:none"></video>
+    <div class="action-row">
+      <button class="ghost-btn" id="savePhotoBtn">📸 사진</button>
+      <button class="ghost-btn" id="saveVideoBtn" style="display:none">🎬 3초 영상</button>
+      <button class="big-btn" id="retryBtn">🔁 한 번 더</button>
+      <button class="ghost-btn" id="homeBtn2">🏠 종목 선택</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import {
+  HighScore, requestWakeLock, SoundKit, FileAudioLoop,
+  HandTracker, ClipRecorder, downloadBlob,
+  drawMirroredVideo, fitCanvasToScreen, isHandRaised, getCursors,
+  AutoDifficulty, levelFromUrl, medalFor,
+  scheduleAutoRecording, ComboShot, drawPhotoOverlay,
+  ScreenShake, spawnPopup, updatePopups, drawPopups,
+  spawnBigPopup, updateBigPopups, drawBigPopups,
+  InputMode, PointerInput, StartGate, drawFallbackBackground,
+  startCamera, formatFileTimestamp, fluidPx, showSoundHint,
+  drawVignette, spawnConfetti, updateConfetti, drawConfetti,
+} from "../js/engine.js?v=2";
+import {
+  CUTE, bob, pop, drawSticker, drawStickerRect, drawChunkyText, drawSparkle,
+  spawnSparkles, updateSparkles, drawSparkles, makeDrifters, drawDrifters,
+  drawBunting, drawGloveCursor, drawCuteBanner, drawPips, drawLevelStars,
+} from "../js/cute.js?v=2";
+requestWakeLock();
+
+const UNIT = "m4";
+const TITLE = "분수 조각 모으기";
+const RECORD_SUFFIX = "판 완성";
+const MEDALS = { bronze: 4, silver: 7, gold: 10 };
+const mode = InputMode.get();
+
+const video = document.getElementById("video");
+const canvas = document.getElementById("gameCanvas");
+let dims = fitCanvasToScreen(canvas);
+let drifters = makeDrifters(16, dims.w, dims.h);
+window.addEventListener("resize", () => { dims = fitCanvasToScreen(canvas); drifters = makeDrifters(16, dims.w, dims.h); });
+
+const sound = new SoundKit();
+const bgm = new FileAudioLoop("../assets/sounds/subbgm.mp3", 0.32);
+const isMuted = () => localStorage.getItem("smo_muted") === "1";
+
+document.getElementById("homeBtn").addEventListener("click", () => { bgm.stop(); location.href = "../index.html"; });
+document.getElementById("homeBtn2").addEventListener("click", () => { bgm.stop(); location.href = "../index.html"; });
+
+function randInt(min, max) { return min + Math.floor(Math.random() * (max - min + 1)); }
+function rand(min, max) { return min + Math.random() * (max - min); }
+function shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; }
+function keyOf(f) { return `${f.n}/${f.d}`; }
+
+// ---------- 분수의 여러 얼굴 ----------
+// 같은 분수라도 원판 그림·띠 모형·숫자·말·대분수로 모습이 다르다.
+// 조각마다 다른 표현을 입혀서, 아이가 "겉모습이 달라도 같은 분수"임을 스스로 읽어내게 한다.
+const ALL_REPRS = ["pie", "bar", "num", "word", "mixed"];
+
+function reprsForLevel(level) {
+  if (level === 1) return ["pie", "num"];
+  if (level === 2) return ["pie", "bar", "num", "word"];
+  return ALL_REPRS;
+}
+
+// 그림 표현은 한 판을 넘어가면 알아보기 어려우므로 2판까지만, 대분수는 가분수일 때만 쓴다
+function pickRepr(f, allowed) {
+  const ok = allowed.filter((r) => {
+    if (r === "pie" || r === "bar") return f.n / f.d <= 2;
+    if (r === "mixed") return f.n > f.d;
+    return true;
+  });
+  return ok[Math.floor(Math.random() * ok.length)] ?? "num";
+}
+
+function fractionWord(f) {
+  if (f.n > f.d) {
+    const whole = Math.floor(f.n / f.d), rem = f.n % f.d;
+    if (rem === 0) return `${whole}`;
+  }
+  return `${f.d}분의 ${f.n}`;
+}
+
+// 3학년 2학기 「분수」 진도
+//  1: 그림 ↔ 숫자 같은 분수 찾기   2: 진분수/가분수 가려내기   3: 분모가 같은 분수의 크기 비교
+function genRound(level) {
+  const allowed = reprsForLevel(level);
+  const need = 3;
+
+  if (level === 1 || (level === 2 && Math.random() < 0.4)) {
+    const d = randInt(3, 6), n = randInt(1, d - 1);
+    const target = { n, d };
+    const pool = [];
+    for (let i = 0; i < need; i++) pool.push({ ...target, ok: true });
+    const used = new Set([keyOf(target)]);
+    let guard = 0;
+    while (pool.length < need + 4 && guard++ < 80) {
+      const dd = Math.random() < 0.55 ? d : randInt(3, 6);
+      const nn = randInt(1, dd - 1);
+      const f = { n: nn, d: dd };
+      // 3학년은 아직 약분을 배우지 않으므로, 값이 같은 다른 표기(2/4 vs 1/2)는 넣지 않는다
+      if (used.has(keyOf(f)) || Math.abs(nn / dd - n / d) < 1e-9) continue;
+      used.add(keyOf(f));
+      pool.push({ ...f, ok: false });
+    }
+    return {
+      kind: "match", target, need, pool: shuffle(pool), allowed,
+      targetRepr: pickRepr(target, allowed),
+      label: "같은 분수를 모아요",
+      hint: "그림·숫자·말이 달라도 같은 분수예요",
+    };
+  }
+
+  if (level === 2 || (level === 3 && Math.random() < 0.45)) {
+    const wantProper = Math.random() < 0.5;
+    const pool = [];
+    const used = new Set();
+    let guard = 0;
+    while (pool.filter((p) => p.ok).length < need && guard++ < 100) {
+      const d = randInt(3, 7);
+      const n = wantProper ? randInt(1, d - 1) : randInt(d, d * 2);
+      const f = { n, d };
+      if (used.has(keyOf(f))) continue;
+      used.add(keyOf(f)); pool.push({ ...f, ok: true });
+    }
+    guard = 0;
+    while (pool.length < need + 4 && guard++ < 100) {
+      const d = randInt(3, 7);
+      const n = wantProper ? randInt(d, d * 2) : randInt(1, d - 1);
+      const f = { n, d };
+      if (used.has(keyOf(f))) continue;
+      used.add(keyOf(f)); pool.push({ ...f, ok: false });
+    }
+    return {
+      kind: wantProper ? "proper" : "improper", need, pool: shuffle(pool), allowed,
+      label: wantProper ? "진분수만 모아요" : "가분수만 모아요",
+      hint: wantProper ? "진분수 = 분자가 분모보다 작아요" : "가분수 = 분자가 분모와 같거나 커요",
+    };
+  }
+
+  // 분모를 하나로 고정해야 "분자가 클수록 크다"는 규칙에 집중할 수 있다
+  const d = randInt(5, 9);
+  const pivot = randInt(2, d - 2);
+  const bigger = Math.random() < 0.5;
+  const pool = [];
+  const okRange = bigger ? [pivot + 1, d + 3] : [1, pivot - 1];
+  const noRange = bigger ? [1, pivot] : [pivot, d + 3];
+  const used = new Set();
+  let guard = 0;
+  while (pool.filter((p) => p.ok).length < need && guard++ < 110) {
+    const n = randInt(okRange[0], okRange[1]);
+    if (n === pivot) continue;
+    const f = { n, d };
+    if (used.has(keyOf(f))) continue;
+    used.add(keyOf(f)); pool.push({ ...f, ok: true });
+  }
+  guard = 0;
+  while (pool.length < need + 4 && guard++ < 110) {
+    const n = randInt(noRange[0], noRange[1]);
+    const f = { n, d };
+    if (used.has(keyOf(f))) continue;
+    used.add(keyOf(f)); pool.push({ ...f, ok: false });
+  }
+  return {
+    kind: "compare", need, pool: shuffle(pool), allowed, pivot: { n: pivot, d },
+    targetRepr: pickRepr({ n: pivot, d }, allowed),
+    label: `${pivot}/${d} 보다 ${bigger ? "큰" : "작은"} 분수를 모아요`,
+    hint: "분모가 같으면 분자가 클수록 큰 분수",
+  };
+}
+
+const handTracker = new HandTracker();
+let pointerInput = null;
+
+async function init() {
+  if (!isMuted()) bgm.play(showSoundHint);
+  if (mode === "motion") {
+    try {
+      await startCamera(video, { width: 640, height: 480 });
+      if (!isMuted()) bgm.play(showSoundHint);
+    } catch (e) {
+      document.getElementById("loadingText").textContent = "⚠️ 카메라를 찾을 수 없어요. 카메라 권한을 확인해주세요.";
+      return;
+    }
+    document.getElementById("loadingText").textContent = "AI 모델을 불러오는 중…";
+    await handTracker.init(2);
+  } else {
+    pointerInput = new PointerInput(canvas);
+  }
+  document.getElementById("loadingPanel").style.display = "none";
+  document.getElementById("raiseIcon").textContent = mode === "motion" ? "🙋" : "👆";
+  document.getElementById("raiseText").textContent = mode === "motion" ? "손을 들어 주세요!" : "화면을 터치(클릭)하면 시작!";
+  document.getElementById("raisePanel").style.display = "flex";
+  state = "raise";
+  requestAnimationFrame(loop);
+}
+
+let state = "loading";
+const holdFill = document.getElementById("holdFill");
+const startGate = new StartGate(mode, holdFill);
+
+let autoDiff, count, combo, maxCombo, playEndAt, round, slices, collected, resolving, roundAt;
+let popups = [], bigPopups = [], confetti = [], sparks = [];
+const shake = new ScreenShake();
+let recorder, comboShot, fallbackShot, autoRec, recordedBlob = null;
+const recIndicator = document.getElementById("recIndicator");
+let cursors = [];
+
+// 기준판이 있는 라운드에서는 왼쪽을 비워 둬서 조각이 그 위를 덮지 않게 한다
+function hasRefPanel() { return round && (round.kind === "match" || round.kind === "compare"); }
+function refPanel() {
+  const { w, h } = dims;
+  return { x: w * 0.12, y: h * 0.44, r: fluidPx(dims, 52, { min: 36, max: 72 }) };
+}
+function playArea() {
+  const { w, h } = dims;
+  return { x0: hasRefPanel() ? w * 0.27 : w * 0.10, x1: w * 0.90, y0: h * 0.32, y1: h * 0.86 };
+}
+function sliceR() { return fluidPx(dims, 46, { min: 34, max: 66 }); }
+
+function newRound() {
+  round = genRound(autoDiff.level);
+  collected = 0;
+  const a = playArea();
+  slices = round.pool.map((f, i) => ({
+    ...f,
+    repr: pickRepr(f, round.allowed),
+    x: rand(a.x0, a.x1), y: rand(a.y0, a.y1),
+    vx: rand(-1, 1) * (55 + autoDiff.level * 22),
+    vy: rand(-1, 1) * (45 + autoDiff.level * 18),
+    born: performance.now() + i * 45,
+    spin: rand(-0.5, 0.5),
+    dead: false,
+  }));
+  resolving = false;
+  roundAt = performance.now();
+}
+
+function startCountdown() {
+  state = "countdown";
+  document.getElementById("countdownPanel").style.display = "flex";
+  const numEl = document.getElementById("countNum");
+  let n = 3;
+  numEl.textContent = n;
+  if (!isMuted()) sound.countBeep();
+  const iv = setInterval(() => {
+    n--;
+    if (n <= 0) {
+      clearInterval(iv);
+      document.getElementById("countdownPanel").style.display = "none";
+      if (!isMuted()) sound.go();
+      beginPlay();
+    } else {
+      numEl.textContent = n;
+      if (!isMuted()) sound.countBeep();
+    }
+  }, 700);
+}
+
+function beginPlay() {
+  state = "playing";
+  const prev = HighScore.get(UNIT);
+  autoDiff = new AutoDifficulty(levelFromUrl(AutoDifficulty.startLevelFromHighScore(prev)));
+  count = 0; combo = 0; maxCombo = 0;
+  popups = []; bigPopups = []; confetti = []; sparks = [];
+  playEndAt = performance.now() + 60000;
+  newRound();
+
+  recorder = new ClipRecorder(canvas, sound, 24);
+  recorder.prepare();
+  comboShot = new ComboShot(canvas);
+  fallbackShot = new ComboShot(canvas);
+  autoRec = scheduleAutoRecording(recorder, {
+    onStartVisual: () => {
+      recIndicator.style.display = "flex";
+      setTimeout(() => { if (!comboShot.captured) fallbackShot.capture(canvas); }, 1500);
+    },
+    onEndVisual: () => { recIndicator.style.display = "none"; },
+    onDone: (blob) => { recordedBlob = blob; },
+    fallbackMs: 8000,
+  });
+}
+
+function grab(s) {
+  if (resolving || s.dead) return;
+  if (s.ok) {
+    s.dead = true;
+    collected++;
+    spawnSparkles(sparks, s.x, s.y, 12, ["#fff", CUTE.sun, CUTE.green]);
+    spawnPopup(popups, s.x, s.y - 30, `${s.n}/${s.d} 획득!`, CUTE.green);
+    if (!isMuted()) sound.pop();
+    if (collected >= round.need) {
+      resolving = true;
+      count++; combo++;
+      if (combo > maxCombo) { maxCombo = combo; comboShot.capture(canvas); }
+      autoDiff.reportCorrect();
+      autoRec.trigger();
+      shake.trigger(7, 160);
+      spawnConfetti(confetti, dims.w / 2, dims.h * 0.5, 40);
+      spawnSparkles(sparks, dims.w / 2, dims.h * 0.5, 20);
+      spawnBigPopup(bigPopups, dims.w / 2, dims.h * 0.5, `${count}판 완성!`, CUTE.sun);
+      if (!isMuted()) { sound.success(); if (combo >= 3 && combo % 3 === 0) sound.fever(); }
+      setTimeout(() => { if (state === "playing") newRound(); }, 780);
+    }
+  } else {
+    resolving = true;
+    combo = 0;
+    autoDiff.reportWrong();
+    shake.trigger(3, 140);
+    spawnPopup(popups, s.x, s.y - 30, "이건 아니야!", CUTE.red);
+    if (!isMuted()) sound.fizzle();
+    setTimeout(() => { if (state === "playing") newRound(); }, 640);
+  }
+}
+
+function endGame() {
+  state = "result";
+  const { medal, label } = medalFor(count, MEDALS);
+  const prev = HighScore.get(UNIT);
+  const best = Math.max(count, prev ? prev.count : 0);
+  if (!prev || count >= prev.count) {
+    HighScore.set(UNIT, { count, bestLevel: autoDiff.level, label: `${medal} ${count}${RECORD_SUFFIX}`, at: Date.now() });
+  }
+  document.getElementById("resultMedal").textContent = medal;
+  document.getElementById("resultTitle").textContent = `${label}! 수고했어요`;
+  document.getElementById("statCount").textContent = count + "판";
+  document.getElementById("statBest").textContent = best + "판";
+  document.getElementById("statCombo").textContent = "🔥" + maxCombo;
+
+  const shot = comboShot.captured ? comboShot : fallbackShot;
+  const previewVideo = document.getElementById("previewVideo");
+  const saveVideoBtn = document.getElementById("saveVideoBtn");
+  if (recordedBlob) {
+    previewVideo.src = URL.createObjectURL(recordedBlob);
+    previewVideo.style.display = "block";
+    saveVideoBtn.style.display = "inline-block";
+  }
+  document.getElementById("savePhotoBtn").onclick = async () => {
+    const blob = await shot.toBlob((c, w, h) => drawPhotoOverlay(c, w, h, { title: TITLE, record: count + RECORD_SUFFIX, medal }));
+    downloadBlob(blob, `수학체육올림픽_분수모으기_${formatFileTimestamp()}.png`);
+  };
+  document.getElementById("saveVideoBtn").onclick = () => {
+    if (recordedBlob) downloadBlob(recordedBlob, `수학체육올림픽_분수모으기_${formatFileTimestamp()}.${recorder.extension}`);
+  };
+  document.getElementById("resultPanel").style.display = "flex";
+  if (!isMuted()) sound.success();
+}
+
+document.getElementById("retryBtn").addEventListener("click", () => {
+  document.getElementById("resultPanel").style.display = "none";
+  document.getElementById("raisePanel").style.display = "flex";
+  startGate.since = 0; startGate.ready = false; holdFill.style.width = "0%";
+  state = "raise";
+});
+
+document.getElementById("raisePanel").addEventListener("click", () => {
+  if (state === "raise" && mode !== "motion") goReady();
+});
+
+// ---------- 표현별 그리기 ----------
+
+// 분수를 "분자 / 분모"로 쌓아 그린다
+function drawFractionNum(ctx, x, y, n, d, size, color) {
+  drawChunkyText(ctx, String(n), x, y - size * 0.5, size * 0.92, color, { outlineWidth: Math.max(3, size * 0.2) });
+  drawChunkyText(ctx, String(d), x, y + size * 0.56, size * 0.92, color, { outlineWidth: Math.max(3, size * 0.2) });
+  ctx.save();
+  ctx.strokeStyle = CUTE.ink; ctx.lineWidth = Math.max(3, size * 0.14); ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(x - size * 0.46, y); ctx.lineTo(x + size * 0.46, y); ctx.stroke();
+  ctx.strokeStyle = color; ctx.lineWidth = Math.max(1.5, size * 0.07);
+  ctx.beginPath(); ctx.moveTo(x - size * 0.44, y); ctx.lineTo(x + size * 0.44, y); ctx.stroke();
+  ctx.restore();
+}
+
+// 대분수: 1과 2/3
+function drawMixedNum(ctx, x, y, n, d, size, color) {
+  const whole = Math.floor(n / d), rem = n % d;
+  if (rem === 0) { drawChunkyText(ctx, String(whole), x, y, size * 1.3, color, { outlineWidth: size * 0.24 }); return; }
+  drawChunkyText(ctx, String(whole), x - size * 0.52, y, size * 1.15, color, { outlineWidth: size * 0.22 });
+  drawFractionNum(ctx, x + size * 0.42, y, rem, d, size * 0.72, color);
+}
+
+// 원판: 분모만큼 쪼개고 분자만큼 색칠 (1을 넘으면 판을 두 개 그린다)
+function drawPie(ctx, x, y, r, n, d, color) {
+  const plates = n > d ? 2 : 1;
+  const pr = plates === 2 ? r * 0.62 : r;
+  for (let p = 0; p < plates; p++) {
+    const px = plates === 2 ? x + (p === 0 ? -pr * 1.05 : pr * 1.05) : x;
+    const filled = Math.max(0, Math.min(d, n - p * d));
+    ctx.save();
+    ctx.beginPath(); ctx.arc(px, y, pr, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffffff"; ctx.fill();
+    for (let i = 0; i < filled; i++) {
+      const a0 = -Math.PI / 2 + (i / d) * Math.PI * 2;
+      const a1 = -Math.PI / 2 + ((i + 1) / d) * Math.PI * 2;
+      ctx.beginPath(); ctx.moveTo(px, y); ctx.arc(px, y, pr, a0, a1); ctx.closePath();
+      ctx.fillStyle = color; ctx.fill();
+    }
+    ctx.strokeStyle = CUTE.ink; ctx.lineWidth = Math.max(2, pr * 0.1);
+    for (let i = 0; i < d; i++) {
+      const a = -Math.PI / 2 + (i / d) * Math.PI * 2;
+      ctx.beginPath(); ctx.moveTo(px, y); ctx.lineTo(px + Math.cos(a) * pr, y + Math.sin(a) * pr); ctx.stroke();
+    }
+    ctx.beginPath(); ctx.arc(px, y, pr, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// 띠 모형: 교과서에서 분수를 나타낼 때 쓰는 그 가로 띠
+function drawBar(ctx, x, y, r, n, d, color) {
+  const rows = n > d ? 2 : 1;
+  const bw = r * 1.75, bh = rows === 2 ? r * 0.46 : r * 0.66;
+  for (let p = 0; p < rows; p++) {
+    const by = rows === 2 ? y + (p === 0 ? -bh * 0.62 : bh * 0.62) : y;
+    const filled = Math.max(0, Math.min(d, n - p * d));
+    const left = x - bw / 2;
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(left, by - bh / 2, bw, bh, bh * 0.24);
+    ctx.fillStyle = "#ffffff"; ctx.fill();
+    ctx.save();
+    ctx.beginPath(); ctx.roundRect(left, by - bh / 2, bw, bh, bh * 0.24); ctx.clip();
+    ctx.fillStyle = color;
+    ctx.fillRect(left, by - bh / 2, (bw / d) * filled, bh);
+    ctx.restore();
+    ctx.strokeStyle = CUTE.ink; ctx.lineWidth = Math.max(2, bh * 0.14);
+    for (let i = 1; i < d; i++) {
+      ctx.beginPath(); ctx.moveTo(left + (bw / d) * i, by - bh / 2); ctx.lineTo(left + (bw / d) * i, by + bh / 2); ctx.stroke();
+    }
+    ctx.beginPath(); ctx.roundRect(left, by - bh / 2, bw, bh, bh * 0.24); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// 말로 쓴 분수: "4분의 3"
+function drawWord(ctx, x, y, r, n, d, color) {
+  const size = r * 0.42;
+  drawChunkyText(ctx, `${d}분의`, x, y - size * 0.62, size, "#fff", { outlineWidth: Math.max(3, size * 0.28) });
+  drawChunkyText(ctx, String(n), x, y + size * 0.72, size * 1.25, color, { outlineWidth: Math.max(3, size * 0.3) });
+}
+
+function drawRepr(ctx, repr, x, y, r, f, color) {
+  if (repr === "pie") drawPie(ctx, x, y, r * 0.78, f.n, f.d, color);
+  else if (repr === "bar") drawBar(ctx, x, y, r * 0.8, f.n, f.d, color);
+  else if (repr === "word") drawWord(ctx, x, y, r, f.n, f.d, color);
+  else if (repr === "mixed") drawMixedNum(ctx, x, y, f.n, f.d, r * 0.5, color);
+  else drawFractionNum(ctx, x, y, f.n, f.d, r * 0.56, color);
+}
+
+// 표현마다 배경색을 달리해 "같은 값, 다른 얼굴"이 한눈에 대비되게 한다
+const REPR_TINT = { pie: CUTE.cream, bar: CUTE.cream, num: "#eaf6ff", word: "#fff0f6", mixed: "#f3f0ff" };
+const REPR_ACCENT = { pie: CUTE.orange, bar: CUTE.cyan, num: CUTE.blue, word: CUTE.pink, mixed: CUTE.purple };
+const REPR_NAME = { pie: "그림", bar: "띠", num: "숫자", word: "말", mixed: "대분수" };
+
+function loop(tsMs) {
+  requestAnimationFrame(loop);
+  if (mode === "motion" && video.readyState < 2) return;
+  const { ctx, w, h } = dims;
+  ctx.save();
+  shake.apply(ctx);
+  if (mode === "motion") drawMirroredVideo(ctx, video, w, h);
+  else drawFallbackBackground(ctx, w, h);
+  drawDrifters(ctx, drifters, dims, 1 / 60);
+  drawBunting(ctx, dims);
+
+  let result = null;
+  if (mode === "motion") {
+    result = handTracker.detect(video, tsMs);
+    if (state === "raise") {
+      let raised = false;
+      if (result && result.landmarks) for (const lm of result.landmarks) if (isHandRaised(lm)) raised = true;
+      if (startGate.update(tsMs, raised)) goReady();
+    }
+  }
+  cursors = getCursors(mode, result, w, h, video, pointerInput);
+
+  if (state === "playing") stepGame();
+
+  for (const c of cursors) drawGloveCursor(ctx, c.x, c.y, fluidPx(dims, 44, { min: 32, max: 62 }), { active: c.over });
+  ctx.restore();
+}
+
+function goReady() {
+  state = "ready";
+  document.getElementById("raisePanel").style.display = "none";
+  document.getElementById("readyPanel").style.display = "flex";
+  if (!isMuted()) sound.click();
+  setTimeout(() => {
+    document.getElementById("readyPanel").style.display = "none";
+    startCountdown();
+  }, 500);
+}
+
+function stepGame() {
+  const { ctx, w, h } = dims;
+  const dt = 1 / 60;
+  const remain = Math.max(0, playEndAt - performance.now());
+  if (remain <= 0) { endGame(); return; }
+
+  const a = playArea();
+  const R = sliceR();
+
+  for (const s of slices) {
+    if (s.dead) continue;
+    s.x += s.vx * dt;
+    s.y += s.vy * dt;
+    if (s.x < a.x0) { s.x = a.x0; s.vx = Math.abs(s.vx); }
+    if (s.x > a.x1) { s.x = a.x1; s.vx = -Math.abs(s.vx); }
+    if (s.y < a.y0) { s.y = a.y0; s.vy = Math.abs(s.vy); }
+    if (s.y > a.y1) { s.y = a.y1; s.vy = -Math.abs(s.vy); }
+  }
+
+  // 조각끼리 겹치면 어떤 분수인지 읽을 수 없으므로 서로 살짝 밀어낸다
+  const minGap = R * 2.05;
+  for (let i = 0; i < slices.length; i++) {
+    if (slices[i].dead) continue;
+    for (let j = i + 1; j < slices.length; j++) {
+      if (slices[j].dead) continue;
+      const p = slices[i], q = slices[j];
+      let dx = q.x - p.x, dy = q.y - p.y;
+      let d = Math.hypot(dx, dy);
+      if (d >= minGap) continue;
+      if (d < 0.01) { dx = 1; dy = 0; d = 1; }
+      const push = (minGap - d) / 2;
+      const ux = dx / d, uy = dy / d;
+      p.x -= ux * push; p.y -= uy * push;
+      q.x += ux * push; q.y += uy * push;
+    }
+  }
+  for (const s of slices) {
+    s.x = Math.max(a.x0, Math.min(a.x1, s.x));
+    s.y = Math.max(a.y0, Math.min(a.y1, s.y));
+  }
+
+  // 새 문제 직후 잠깐은 입력을 받지 않는다 — 손이 우연히 조각 위에 있었다고
+  // 문제를 읽어보기도 전에 오답 처리되면 아이 입장에서는 억울하다
+  const armed = performance.now() - roundAt > 550;
+  if (armed && !resolving) {
+    outer:
+    for (const c of cursors) {
+      for (const s of slices) {
+        if (s.dead) continue;
+        if (Math.hypot(c.x - s.x, c.y - s.y) < R * 0.92) { c.over = true; grab(s); break outer; }
+      }
+    }
+  }
+
+  // 왼쪽 기준판
+  if (hasRefPanel()) {
+    const { x: px, y: py, r: pr } = refPanel();
+    const f = round.kind === "match" ? round.target : round.pivot;
+    const repr = round.targetRepr;
+    drawSticker(ctx, px, py, pr, REPR_TINT[repr] ?? CUTE.cream, { lineWidth: Math.max(4, pr * 0.11) });
+    drawRepr(ctx, repr, px, py, pr * 0.86, f, REPR_ACCENT[repr]);
+    const tagTxt = round.kind === "match" ? "같은 값!" : "기준";
+    const tagW = pr * (round.kind === "match" ? 1.9 : 1.1);
+    drawStickerRect(ctx, px, py + pr * 1.36, tagW, pr * 0.52, pr * 0.2, CUTE.sun, { lineWidth: 3, drop: 3 });
+    drawChunkyText(ctx, tagTxt, px, py + pr * 1.36, pr * 0.3, "#fff", { outlineWidth: 4.5 });
+  }
+
+  for (const s of slices) {
+    if (s.dead) continue;
+    const k = pop(s.born, 320);
+    const rr = R * k;
+    if (rr <= 2) continue;
+    const by = bob(1.1, rr * 0.06, s.x * 0.01);
+    drawSticker(ctx, s.x, s.y + by, rr, REPR_TINT[s.repr] ?? CUTE.cream, { lineWidth: Math.max(3, rr * 0.12) });
+    drawRepr(ctx, s.repr, s.x, s.y + by, rr * 0.86, s, REPR_ACCENT[s.repr]);
+    // 어떤 얼굴(그림/숫자/말)인지 작은 꼬리표로 알려준다
+    drawStickerRect(ctx, s.x, s.y + by - rr * 1.04, rr * 0.86, rr * 0.36, rr * 0.16, REPR_ACCENT[s.repr], { lineWidth: 2.5, drop: 2 });
+    drawChunkyText(ctx, REPR_NAME[s.repr], s.x, s.y + by - rr * 1.04, rr * 0.22, "#fff", { outlineWidth: 3 });
+  }
+
+  drawPips(ctx, dims, w / 2, h - fluidPx(dims, 26, { min: 18, max: 36 }), round.need, collected, fluidPx);
+
+  confetti = updateConfetti(confetti, dt);
+  drawConfetti(ctx, confetti);
+  sparks = updateSparkles(sparks, dt);
+  drawSparkles(ctx, sparks);
+  popups = updatePopups(popups, dt);
+  drawPopups(ctx, popups);
+  bigPopups = updateBigPopups(bigPopups, dt);
+  drawBigPopups(ctx, bigPopups);
+
+  drawVignette(ctx, w, h, 0.2);
+  drawCuteBanner(ctx, dims, [
+    { text: round.label, size: 32, chunky: true, color: CUTE.sun },
+    { text: `🍕 ${collected}/${round.need}   🔥 ${combo}   🏅 ${count}판   ⏱ ${Math.ceil(remain / 1000)}초`, size: 18, color: CUTE.orangeDark },
+    { text: `${round.hint} · ${mode === "motion" ? "손으로 조각을 만져서 모아요!" : "조각을 탭해서 모아요!"}`, size: 14, weight: "700", color: "#5c6b8a" },
+  ], fluidPx);
+
+  drawLevelStars(ctx, dims, autoDiff.level, fluidPx);
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>스피드 곱셈 대시 · 종목 1</title>
+<link rel="stylesheet" href="../css/style.css?v=2">
+</head>
+<body>
+
+<div class="game-stage">
+  <video id="video" playsinline muted style="display:none"></video>
+  <canvas id="gameCanvas"></canvas>
+
+  <div class="hud">
+    <div class="rec" id="recIndicator" style="display:none"><span class="dot"></span>REC</div>
+    <button class="home-btn" id="homeBtn">🏠</button>
+  </div>
+
+  <div class="overlay-panel" id="loadingPanel">
+    <h2>⚡ 스피드 곱셈 대시</h2>
+    <p id="loadingText">준비 중…</p>
+  </div>
+
+  <div class="overlay-panel" id="raisePanel" style="display:none">
+    <div class="raise-icon" id="raiseIcon">🙋</div>
+    <h2 id="raiseText">손을 들어 주세요!</h2>
+    <div class="hold-bar"><div class="hold-fill" id="holdFill"></div></div>
+  </div>
+
+  <div class="overlay-panel ready-flash" id="readyPanel" style="display:none">
+    <h2>✋ 좋아요! 준비됐어요</h2>
+  </div>
+
+  <div class="overlay-panel" id="countdownPanel" style="display:none">
+    <div class="countdown-num" id="countNum">3</div>
+  </div>
+
+  <div class="overlay-panel" id="resultPanel" style="display:none">
+    <h2 id="resultTitle">결과</h2>
+    <div class="medal" id="resultMedal">🥉</div>
+    <div class="result-stats">
+      <div class="stat-box"><div class="num" id="statCount">0개</div><div class="label">기록</div></div>
+      <div class="stat-box"><div class="num" id="statBest">0개</div><div class="label">최고 기록</div></div>
+      <div class="stat-box"><div class="num" id="statCombo">0</div><div class="label">최고 콤보</div></div>
+    </div>
+    <video class="preview" id="previewVideo" controls playsinline style="display:none"></video>
+    <div class="action-row">
+      <button class="ghost-btn" id="savePhotoBtn">📸 사진</button>
+      <button class="ghost-btn" id="saveVideoBtn" style="display:none">🎬 3초 영상</button>
+      <button class="big-btn" id="retryBtn">🔁 한 번 더</button>
+      <button class="ghost-btn" id="homeBtn2">🏠 종목 선택</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import {
+  HighScore, requestWakeLock, SoundKit, FileAudioLoop,
+  HandTracker, ClipRecorder, downloadBlob,
+  drawMirroredVideo, fitCanvasToScreen, isHandRaised, getCursors,
+  AutoDifficulty, levelFromUrl, medalFor,
+  scheduleAutoRecording, ComboShot, drawPhotoOverlay,
+  ScreenShake, spawnPopup, updatePopups, drawPopups,
+  spawnBigPopup, updateBigPopups, drawBigPopups,
+  InputMode, PointerInput, StartGate, drawFallbackBackground,
+  startCamera, formatFileTimestamp, fluidPx, showSoundHint,
+  drawVignette, popScale, spawnConfetti, updateConfetti, drawConfetti,
+} from "../js/engine.js?v=2";
+import {
+  CUTE, bob, drawSticker, drawChunkyText, drawFace, drawSparkle,
+  spawnSparkles, updateSparkles, drawSparkles, makeDrifters, drawDrifters,
+  drawBunting, drawGloveCursor, drawCuteBanner, drawLevelStars,
+} from "../js/cute.js?v=2";
+requestWakeLock();
+
+const UNIT = "m1";
+const TITLE = "스피드 곱셈 대시";
+const RECORD_SUFFIX = "골 통과";
+const MEDALS = { bronze: 6, silver: 10, gold: 14 };
+const mode = InputMode.get();
+const BOOST_MS = 620;
+
+const video = document.getElementById("video");
+const canvas = document.getElementById("gameCanvas");
+let dims = fitCanvasToScreen(canvas);
+let drifters = makeDrifters(16, dims.w, dims.h);
+window.addEventListener("resize", () => { dims = fitCanvasToScreen(canvas); drifters = makeDrifters(16, dims.w, dims.h); });
+
+const sound = new SoundKit();
+const bgm = new FileAudioLoop("../assets/sounds/subbgm.mp3", 0.32);
+const isMuted = () => localStorage.getItem("smo_muted") === "1";
+
+document.getElementById("homeBtn").addEventListener("click", () => { bgm.stop(); location.href = "../index.html"; });
+document.getElementById("homeBtn2").addEventListener("click", () => { bgm.stop(); location.href = "../index.html"; });
+
+function randInt(min, max) { return min + Math.floor(Math.random() * (max - min + 1)); }
+function shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; }
+
+// 3학년 2학기 「곱셈」 단원 진도에 맞춘 3단계
+//  1: (두 자리)×(한 자리) 올림 없음   2: (두 자리)×(한 자리) 올림 있음   3: (두 자리)×(두 자리)
+function genQuestion(level) {
+  if (level === 1) {
+    let a, b;
+    do { a = randInt(11, 44); b = randInt(2, 4); }
+    while ((a % 10) * b >= 10 || Math.floor(a / 10) * b >= 10 || a % 10 === 0);
+    return { text: `${a} × ${b}`, answer: a * b, a, b };
+  }
+  if (level === 2) {
+    let a, b;
+    do { a = randInt(13, 89); b = randInt(3, 9); } while ((a % 10) * b < 10);
+    return { text: `${a} × ${b}`, answer: a * b, a, b };
+  }
+  const a = randInt(12, 49), b = randInt(11, 29);
+  return { text: `${a} × ${b}`, answer: a * b, a, b };
+}
+
+// 오답은 아이들이 실제로 하는 실수(올림 빠뜨리기, 한 자리 어긋나기)를 흉내 내야 고민할 가치가 생긴다
+function buildChoices(q, n) {
+  const set = new Set([q.answer]);
+  const tens = Math.floor(q.a / 10), ones = q.a % 10;
+  const candidates = [
+    tens * 10 * q.b + ones * q.b - (ones * q.b >= 10 ? 10 : 0), // 올림 빠뜨림
+    q.answer + 10, q.answer - 10, q.answer + q.b, q.answer - q.b,
+    q.answer + 1, q.answer - 1, q.answer + 20, q.answer - 20,
+  ];
+  for (const c of shuffle(candidates)) {
+    if (set.size >= n) break;
+    if (c > 0 && c !== q.answer) set.add(c);
+  }
+  let guard = 0;
+  while (set.size < n && guard++ < 40) {
+    const v = q.answer + randInt(-30, 30);
+    if (v > 0 && v !== q.answer) set.add(v);
+  }
+  return shuffle([...set]);
+}
+
+const handTracker = new HandTracker();
+let pointerInput = null;
+
+async function init() {
+  if (!isMuted()) bgm.play(showSoundHint);
+  if (mode === "motion") {
+    try {
+      await startCamera(video, { width: 640, height: 480 });
+      if (!isMuted()) bgm.play(showSoundHint);
+    } catch (e) {
+      document.getElementById("loadingText").textContent = "⚠️ 카메라를 찾을 수 없어요. 카메라 권한을 확인해주세요.";
+      return;
+    }
+    document.getElementById("loadingText").textContent = "AI 모델을 불러오는 중…";
+    await handTracker.init(2);
+  } else {
+    pointerInput = new PointerInput(canvas);
+  }
+  document.getElementById("loadingPanel").style.display = "none";
+  document.getElementById("raiseIcon").textContent = mode === "motion" ? "🙋" : "👆";
+  document.getElementById("raiseText").textContent = mode === "motion" ? "손을 들어 주세요!" : "화면을 터치(클릭)하면 시작!";
+  document.getElementById("raisePanel").style.display = "flex";
+  state = "raise";
+  requestAnimationFrame(loop);
+}
+
+let state = "loading";
+const holdFill = document.getElementById("holdFill");
+const startGate = new StartGate(mode, holdFill);
+
+let autoDiff, count, combo, maxCombo, playEndAt, question, gates, resolving, boostUntil = 0;
+let popups = [], bigPopups = [], confetti = [], dust = [], sparks = [];
+const shake = new ScreenShake();
+let recorder, comboShot, fallbackShot, autoRec, recordedBlob = null;
+const recIndicator = document.getElementById("recIndicator");
+let cursors = [];
+let trackState = { phase: 0 };
+
+// 게이트는 소실점에서 태어나 z(0→1)를 따라 화면 앞으로 커지며 다가온다 = "내가 달려간다"는 1인칭 감각
+const VANISH_Y_FRAC = 0.30;
+function gateScreenPos(g) {
+  const { w, h } = dims;
+  const vx = w * 0.5, vy = h * VANISH_Y_FRAC;
+  const t = g.z;
+  const spread = w * 0.44 * t;
+  return {
+    x: vx + g.lane * spread,
+    y: vy + (h * 0.92 - vy) * (t * t),
+    r: fluidPx(dims, 20, { min: 14, max: 34 }) + fluidPx(dims, 58, { min: 40, max: 92 }) * t,
+  };
+}
+
+function newQuestion() {
+  question = genQuestion(autoDiff.level);
+  const n = autoDiff.level === 3 ? 3 : 3;
+  const values = buildChoices(question, n);
+  const lanes = shuffle(n === 3 ? [-1, 0, 1] : [-1.1, -0.37, 0.37, 1.1]);
+  gates = values.map((val, i) => ({
+    val, correct: val === question.answer, lane: lanes[i],
+    z: 0.06 + i * 0.015, dead: false, born: performance.now(),
+  }));
+  resolving = false;
+}
+
+function startCountdown() {
+  state = "countdown";
+  document.getElementById("countdownPanel").style.display = "flex";
+  const numEl = document.getElementById("countNum");
+  let n = 3;
+  numEl.textContent = n;
+  if (!isMuted()) sound.countBeep();
+  const iv = setInterval(() => {
+    n--;
+    if (n <= 0) {
+      clearInterval(iv);
+      document.getElementById("countdownPanel").style.display = "none";
+      if (!isMuted()) sound.go();
+      beginPlay();
+    } else {
+      numEl.textContent = n;
+      if (!isMuted()) sound.countBeep();
+    }
+  }, 700);
+}
+
+function beginPlay() {
+  state = "playing";
+  const prev = HighScore.get(UNIT);
+  autoDiff = new AutoDifficulty(levelFromUrl(AutoDifficulty.startLevelFromHighScore(prev)));
+  count = 0; combo = 0; maxCombo = 0;
+  popups = []; bigPopups = []; confetti = []; dust = []; sparks = [];
+  playEndAt = performance.now() + 60000;
+  newQuestion();
+
+  recorder = new ClipRecorder(canvas, sound, 24);
+  recorder.prepare();
+  comboShot = new ComboShot(canvas);
+  fallbackShot = new ComboShot(canvas);
+  autoRec = scheduleAutoRecording(recorder, {
+    onStartVisual: () => {
+      recIndicator.style.display = "flex";
+      setTimeout(() => { if (!comboShot.captured) fallbackShot.capture(canvas); }, 1500);
+    },
+    onEndVisual: () => { recIndicator.style.display = "none"; },
+    onDone: (blob) => { recordedBlob = blob; },
+    fallbackMs: 8000,
+  });
+}
+
+function passGate(g) {
+  if (resolving) return;
+  resolving = true;
+  const p = gateScreenPos(g);
+  shake.trigger(g.correct ? 8 : 3, 160);
+  if (g.correct) {
+    count++; combo++;
+    if (combo > maxCombo) { maxCombo = combo; comboShot.capture(canvas); }
+    autoDiff.reportCorrect();
+    autoRec.trigger();
+    boostUntil = performance.now() + BOOST_MS;
+    spawnSparkles(sparks, p.x, p.y, 20, ["#fff", CUTE.sun, CUTE.green]);
+    spawnConfetti(confetti, p.x, p.y, 30);
+    spawnPopup(popups, p.x, p.y - 24, "통과!", CUTE.sun);
+    spawnBigPopup(bigPopups, dims.w / 2, dims.h * 0.5, `${count}골!`, CUTE.sun);
+    if (!isMuted()) { sound.pop(); if (combo === 3) sound.comboUp(); if (combo >= 5 && combo % 5 === 0) sound.fever(); }
+  } else {
+    combo = 0;
+    autoDiff.reportWrong();
+    spawnPopup(popups, p.x, p.y - 24, "부딪혔어요", CUTE.red);
+    if (!isMuted()) sound.fizzle();
+  }
+  for (const t of gates) t.dead = true;
+  setTimeout(() => { if (state === "playing") newQuestion(); }, BOOST_MS + 60);
+}
+
+function missAll() {
+  if (resolving) return;
+  resolving = true;
+  combo = 0;
+  autoDiff.reportWrong();
+  spawnPopup(popups, dims.w / 2, dims.h * 0.62, "놓쳤어요!", CUTE.red);
+  if (!isMuted()) sound.fizzle();
+  for (const t of gates) t.dead = true;
+  setTimeout(() => { if (state === "playing") newQuestion(); }, 420);
+}
+
+function endGame() {
+  state = "result";
+  const { medal, label } = medalFor(count, MEDALS);
+  const prev = HighScore.get(UNIT);
+  const best = Math.max(count, prev ? prev.count : 0);
+  if (!prev || count >= prev.count) {
+    HighScore.set(UNIT, { count, bestLevel: autoDiff.level, label: `${medal} ${count}${RECORD_SUFFIX}`, at: Date.now() });
+  }
+  document.getElementById("resultMedal").textContent = medal;
+  document.getElementById("resultTitle").textContent = `${label}! 수고했어요`;
+  document.getElementById("statCount").textContent = count + "골";
+  document.getElementById("statBest").textContent = best + "골";
+  document.getElementById("statCombo").textContent = "🔥" + maxCombo;
+
+  const shot = comboShot.captured ? comboShot : fallbackShot;
+  const previewVideo = document.getElementById("previewVideo");
+  const saveVideoBtn = document.getElementById("saveVideoBtn");
+  if (recordedBlob) {
+    previewVideo.src = URL.createObjectURL(recordedBlob);
+    previewVideo.style.display = "block";
+    saveVideoBtn.style.display = "inline-block";
+  }
+  document.getElementById("savePhotoBtn").onclick = async () => {
+    const blob = await shot.toBlob((c, w, h) => drawPhotoOverlay(c, w, h, { title: TITLE, record: count + RECORD_SUFFIX, medal }));
+    downloadBlob(blob, `수학체육올림픽_곱셈대시_${formatFileTimestamp()}.png`);
+  };
+  document.getElementById("saveVideoBtn").onclick = () => {
+    if (recordedBlob) downloadBlob(recordedBlob, `수학체육올림픽_곱셈대시_${formatFileTimestamp()}.${recorder.extension}`);
+  };
+  document.getElementById("resultPanel").style.display = "flex";
+  if (!isMuted()) sound.success();
+}
+
+document.getElementById("retryBtn").addEventListener("click", () => {
+  document.getElementById("resultPanel").style.display = "none";
+  document.getElementById("raisePanel").style.display = "flex";
+  startGate.since = 0; startGate.ready = false; holdFill.style.width = "0%";
+  state = "raise";
+});
+
+document.getElementById("raisePanel").addEventListener("click", () => {
+  if (state === "raise" && mode !== "motion") goReady();
+});
+
+function drawTrack(ctx, w, h, dt) {
+  const boosting = performance.now() < boostUntil;
+  const speed = boosting ? 3.6 : 1.15;
+  trackState.phase = (trackState.phase ?? 0) + dt * 0.6 * speed;
+  const vx = w * 0.5, vy = h * VANISH_Y_FRAC, railHalf = w * 0.52;
+  ctx.save();
+  ctx.strokeStyle = boosting ? "rgba(255,209,102,0.6)" : "rgba(255,255,255,0.35)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(vx, vy); ctx.lineTo(vx - railHalf, h);
+  ctx.moveTo(vx, vy); ctx.lineTo(vx + railHalf, h);
+  ctx.stroke();
+  for (let i = 0; i < (boosting ? 10 : 7); i++) {
+    const t = (trackState.phase + i / (boosting ? 10 : 7)) % 1;
+    const y = vy + (h - vy) * (t * t);
+    const halfW = railHalf * t;
+    ctx.globalAlpha = t * 0.55;
+    ctx.strokeStyle = boosting ? "rgba(255,209,102,0.7)" : "rgba(255,255,255,0.3)";
+    ctx.lineWidth = 2 + t * 4;
+    ctx.beginPath();
+    ctx.moveTo(vx - halfW, y); ctx.lineTo(vx + halfW, y);
+    ctx.stroke();
+  }
+  ctx.restore();
+  if (boosting) {
+    drawChunkyText(ctx, "💨 질주!", w / 2, h * 0.66, fluidPx(dims, 34), CUTE.sun, { outlineWidth: fluidPx(dims, 8) });
+  }
+}
+
+// 발밑 먼지 — 속도감을 몸으로 느끼게 하는 값싼 장치
+function updateDust(dt) {
+  const boosting = performance.now() < boostUntil;
+  if (Math.random() < (boosting ? 0.9 : 0.4)) {
+    dust.push({ x: dims.w * (0.5 + (Math.random() - 0.5) * 0.5), y: dims.h * VANISH_Y_FRAC + 10, z: 0.05, r: 3 + Math.random() * 4 });
+  }
+  const spd = boosting ? 2.6 : 1;
+  for (const d of dust) d.z += dt * 0.55 * spd;
+  dust = dust.filter((d) => d.z < 1.1);
+}
+function drawDust(ctx) {
+  const { w, h } = dims;
+  const vx = w * 0.5, vy = h * VANISH_Y_FRAC;
+  ctx.save();
+  for (const d of dust) {
+    const x = vx + (d.x - vx) * d.z;
+    const y = vy + (h - vy) * (d.z * d.z);
+    ctx.globalAlpha = Math.max(0, 0.45 * (1 - d.z));
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath(); ctx.arc(x, y, d.r * (0.4 + d.z), 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function loop(tsMs) {
+  requestAnimationFrame(loop);
+  if (mode === "motion" && video.readyState < 2) return;
+  const { ctx, w, h } = dims;
+  ctx.save();
+  shake.apply(ctx);
+  if (mode === "motion") drawMirroredVideo(ctx, video, w, h);
+  else drawFallbackBackground(ctx, w, h);
+  drawDrifters(ctx, drifters, dims, 1 / 60);
+  drawBunting(ctx, dims);
+  if (state === "playing") { drawTrack(ctx, w, h, 1 / 60); updateDust(1 / 60); drawDust(ctx); }
+
+  let result = null;
+  if (mode === "motion") {
+    result = handTracker.detect(video, tsMs);
+    if (state === "raise") {
+      let raised = false;
+      if (result && result.landmarks) for (const lm of result.landmarks) if (isHandRaised(lm)) raised = true;
+      if (startGate.update(tsMs, raised)) goReady();
+    }
+  }
+  cursors = getCursors(mode, result, w, h, video, pointerInput);
+
+  if (state === "playing") stepGame();
+
+  for (const c of cursors) drawGloveCursor(ctx, c.x, c.y, fluidPx(dims, 44, { min: 32, max: 62 }), { active: performance.now() < boostUntil });
+  ctx.restore();
+}
+
+function goReady() {
+  state = "ready";
+  document.getElementById("raisePanel").style.display = "none";
+  document.getElementById("readyPanel").style.display = "flex";
+  if (!isMuted()) sound.click();
+  setTimeout(() => {
+    document.getElementById("readyPanel").style.display = "none";
+    startCountdown();
+  }, 500);
+}
+
+function stepGame() {
+  const { ctx, w, h } = dims;
+  const remain = Math.max(0, playEndAt - performance.now());
+  if (remain <= 0) { endGame(); return; }
+
+  // 레벨이 오를수록 게이트가 빨리 다가온다 = 달리기 속도 도전
+  const approach = (0.30 + autoDiff.level * 0.055) / 60;
+  if (!resolving) {
+    for (const g of gates) g.z += approach;
+    if (gates.every((g) => g.z > 1.02)) missAll();
+  }
+
+  if (!resolving) {
+    outer:
+    for (const c of cursors) {
+      for (const g of gates) {
+        if (g.dead || g.z < 0.22) continue;
+        const p = gateScreenPos(g);
+        if (Math.hypot(c.x - p.x, c.y - p.y) < p.r * 0.95) { passGate(g); break outer; }
+      }
+    }
+  }
+
+  // 먼 게이트부터 그려야 가까운 게이트가 위에 겹친다
+  const laneTint = [CUTE.red, CUTE.sun, CUTE.blue, CUTE.green];
+  [...gates].sort((a, b) => a.z - b.z).forEach((g, i) => {
+    if (g.dead) return;
+    const p = gateScreenPos(g);
+    const r = p.r * popScale(g.born, 280);
+    if (r <= 2) return;
+    const tint = laneTint[(g.lane + 2) % laneTint.length] ?? CUTE.sun;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, g.z * 3.2);
+    // 통통한 링 골대: 바깥은 색 테두리, 안쪽은 크림색 — 통과한다는 느낌이 나도록
+    drawSticker(ctx, p.x, p.y + bob(1.3, r * 0.05, g.lane), r, tint, { lineWidth: Math.max(4, r * 0.15) });
+    drawSticker(ctx, p.x, p.y + bob(1.3, r * 0.05, g.lane), r * 0.74, CUTE.cream, { lineWidth: Math.max(3, r * 0.08), gloss: false, drop: 0 });
+    drawChunkyText(ctx, String(g.val), p.x, p.y + bob(1.3, r * 0.05, g.lane), Math.max(13, r * 0.6), tint, {
+      outline: CUTE.ink, outlineWidth: Math.max(3, r * 0.14),
+    });
+    ctx.restore();
+  });
+
+  confetti = updateConfetti(confetti, 1 / 60);
+  drawConfetti(ctx, confetti);
+  sparks = updateSparkles(sparks, 1 / 60);
+  drawSparkles(ctx, sparks);
+  popups = updatePopups(popups, 1 / 60);
+  drawPopups(ctx, popups);
+  bigPopups = updateBigPopups(bigPopups, 1 / 60);
+  drawBigPopups(ctx, bigPopups);
+
+  drawVignette(ctx, w, h, 0.2);
+  drawCuteBanner(ctx, dims, [
+    { text: `${question.text} = ?`, size: 40, chunky: true, color: CUTE.sun },
+    { text: `🔥 ${combo}   🏅 ${count}골   ⏱ ${Math.ceil(remain / 1000)}초`, size: 18, color: CUTE.orangeDark },
+    { text: mode === "motion" ? "다가오는 골대 중 정답을 손으로 통과!" : "다가오는 골대 중 정답을 탭!", size: 14, weight: "700", color: "#5c6b8a" },
+  ], fluidPx);
+
+  drawLevelStars(ctx, dims, autoDiff.level, fluidPx);
+}
+
+init();
+</script>
+</body>
+</html>

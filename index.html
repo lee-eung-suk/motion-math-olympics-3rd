@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>수학 체육올림픽</title>
+<link rel="stylesheet" href="css/style.css?v=2">
+</head>
+<body class="landing">
+
+<div class="landing-decor" aria-hidden="true">
+  <span class="cloud1">☁️</span>
+  <span class="cloud2">☁️</span>
+  <span class="cloud3">☁️</span>
+  <span class="star1">⭐</span>
+  <span class="star2">✨</span>
+  <span class="star3">⭐</span>
+</div>
+
+<div class="menu-wrap">
+  <div class="menu-header">
+    <div>
+      <h1>🏃 수학 체육올림픽</h1>
+      <div class="sub">초등 3학년 2학기 · 속도 도전 &amp; 태그형 경쟁 6종목</div>
+    </div>
+    <div class="actions">
+      <button class="icon-btn" id="modeBtn">📷 모드</button>
+      <button class="icon-btn" id="volBtn">🔊</button>
+      <button class="icon-btn" id="helpBtn">❓ 도움말</button>
+    </div>
+  </div>
+
+  <div class="section-label">🎮 종목을 고르면 바로 시작해요</div>
+  <div class="grid" id="grid"></div>
+
+  <div class="start-cta-row">
+    <button class="start-cta" id="randomStartBtn">🎮 올림픽 시작하기</button>
+  </div>
+
+  <div class="footer">📄 개인정보 처리방침 · 카메라 영상은 저장되지 않아요 (녹화 영상은 기기에만 저장됩니다)</div>
+  <div class="credit">경북수학교육교사연구회 -수(數)다방-</div>
+</div>
+
+<div class="overlay-panel" id="modePanel" style="display:none;position:fixed;">
+  <h2>원하는 조작 방식을 선택해 주세요!</h2>
+  <div class="mode-row">
+    <button class="mode-btn" data-mode="motion">
+      <img src="assets/button1.png" alt="모션인식: 카메라 앞에서 몸으로 반응해요">
+    </button>
+    <button class="mode-btn" data-mode="touch">
+      <img src="assets/button2.png" alt="터치 모드: 태블릿 화면을 직접 터치해요">
+    </button>
+    <button class="mode-btn" data-mode="mouse">
+      <img src="assets/button3.png" alt="마우스 모드: PC에서 마우스로 클릭·드래그해요">
+    </button>
+  </div>
+</div>
+
+<div class="overlay-panel" id="helpPanel" style="display:none;position:fixed;">
+  <div class="help-modal">
+    <h2>🏃 몸으로 푸는 수학! 놀이 방법</h2>
+    <p class="help-sub">태블릿을 책상 위에 놓고 앉아서, 손만 움직이면 돼요!</p>
+    <div class="help-steps">
+      <img src="assets/help1.png" alt="1단계 모션 인식: 손을 들어 준비, 2단계 터치 방식: 화면을 콕 눌러 시작">
+      <img src="assets/help2.png" alt="3단계 60초 동안 신나게 게임하기, 4단계 멋진 영상과 사진 저장하기">
+    </div>
+    <button class="big-btn" id="closeHelp">알겠어요!</button>
+  </div>
+</div>
+
+<script type="module">
+import { HighScore, InputMode, FileAudioLoop, showSoundHint } from "./js/engine.js?v=2";
+
+const isMuted = () => localStorage.getItem("smo_muted") === "1";
+const bgm = new FileAudioLoop("assets/sounds/bgm.mp3", 0.35);
+if (!isMuted()) bgm.play(showSoundHint);
+
+const UNITS = [
+  { id: "m1", emoji: "⚡", title: "종목 1", sub: "곱셈 · 달리기", name: "스피드 곱셈 대시", href: "games/u1-multiply.html", thumb: "assets/thumb1.png" },
+  { id: "m2", emoji: "🏃", title: "종목 2", sub: "나눗셈 · 술래잡기", name: "도망가는 몫! 태그 나눗셈", href: "games/u2-divide.html", thumb: "assets/thumb2.png" },
+  { id: "m3", emoji: "🎯", title: "종목 3", sub: "원 · 원형 주행", name: "원 그리기 추격전", href: "games/u3-circle.html", thumb: "assets/thumb3.png" },
+  { id: "m4", emoji: "🍕", title: "종목 4", sub: "분수 · 수집 추격", name: "분수 조각 모으기", href: "games/u4-fraction.html", thumb: "assets/thumb4.png" },
+  { id: "m5", emoji: "⚖️", title: "종목 5", sub: "들이와 무게 · 릴레이", name: "저울 균형 릴레이", href: "games/u5-weight.html", thumb: "assets/thumb5.png" },
+  { id: "m6", emoji: "📊", title: "종목 6", sub: "그림그래프 · 경로 추적", name: "그래프 경로 찾기", href: "games/u6-graph.html", thumb: "assets/thumb6.png" },
+];
+
+function goToGame(href) { bgm.stop(); location.href = href; }
+
+let goldCount = 0;
+const grid = document.getElementById("grid");
+UNITS.forEach((u) => {
+  const card = document.createElement("button");
+  card.className = "card";
+  const best = HighScore.get(u.id);
+  if (best && best.label && best.label.startsWith("🥇")) goldCount++;
+  card.innerHTML = `
+    <div class="card-head">
+      <span class="card-badge">${u.title}</span>
+      <span class="card-subject">${u.sub}</span>
+    </div>
+    <div class="card-name">${u.name}</div>
+    <div class="card-thumb" data-emoji="${u.emoji}"><img src="${u.thumb}" alt="${u.name}" loading="lazy"></div>
+    <div class="card-foot">${best ? best.label : "아직 기록 없음"}</div>
+  `;
+  // 썸네일 그림 안에 이미 종목 이름이 적혀 있으므로, 그림이 뜨면 글자 제목은 숨겨
+  // 카드 전체가 하나의 그림 버튼처럼 보이게 한다. 그림이 없으면 글자와 이모지로 대체된다.
+  const thumbImg = card.querySelector(".card-thumb img");
+  const markLoaded = () => card.classList.add("has-thumb");
+  thumbImg.addEventListener("load", markLoaded, { once: true });
+  thumbImg.addEventListener("error", () => {
+    thumbImg.style.display = "none";
+    thumbImg.parentElement.classList.add("thumb-fallback");
+  }, { once: true });
+  // 캐시된 그림은 리스너를 붙이기 전에 이미 로드가 끝나 load 이벤트가 오지 않는다
+  if (thumbImg.complete && thumbImg.naturalWidth > 0) markLoaded();
+  card.addEventListener("click", () => {
+    card.classList.add("bounce");
+    setTimeout(() => goToGame(u.href), 180);
+  });
+  grid.appendChild(card);
+});
+
+document.getElementById("randomStartBtn").addEventListener("click", () => {
+  const pick = UNITS[Math.floor(Math.random() * UNITS.length)];
+  goToGame(pick.href);
+});
+if (goldCount === UNITS.length) {
+  const banner = document.createElement("div");
+  banner.className = "footer";
+  banner.style.color = "#ffb703";
+  banner.style.fontWeight = "800";
+  banner.textContent = "⭐ 6종목 모두 금메달! 종합 우승 트로피 🏆";
+  document.querySelector(".menu-wrap").insertBefore(banner, document.querySelector(".grid"));
+}
+
+const helpPanel = document.getElementById("helpPanel");
+document.getElementById("helpBtn").addEventListener("click", () => helpPanel.style.display = "flex");
+document.getElementById("closeHelp").addEventListener("click", () => helpPanel.style.display = "none");
+
+const modePanel = document.getElementById("modePanel");
+const modeBtn = document.getElementById("modeBtn");
+function refreshModeBtn() {
+  modeBtn.textContent = InputMode.label(InputMode.get());
+  document.querySelectorAll(".mode-btn").forEach((b) => {
+    b.classList.toggle("selected", b.dataset.mode === InputMode.get());
+  });
+}
+modeBtn.addEventListener("click", () => modePanel.style.display = "flex");
+document.querySelectorAll(".mode-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    InputMode.set(btn.dataset.mode);
+    refreshModeBtn();
+    setTimeout(() => modePanel.style.display = "none", 200);
+  });
+});
+refreshModeBtn();
+// 이번 브라우저 세션(탭)에서 아직 조작 방식 모달을 안 띄웠다면 랜딩페이지 첫 진입 시 한 번만 보여준다.
+if (!sessionStorage.getItem("smo3_mode_shown")) {
+  sessionStorage.setItem("smo3_mode_shown", "1");
+  modePanel.style.display = "flex";
+}
+
+const volBtn = document.getElementById("volBtn");
+volBtn.addEventListener("click", () => {
+  const muted = localStorage.getItem("smo_muted") === "1";
+  localStorage.setItem("smo_muted", muted ? "0" : "1");
+  volBtn.textContent = muted ? "🔊" : "🔇";
+  bgm.setMuted(!muted);
+});
+if (localStorage.getItem("smo_muted") === "1") volBtn.textContent = "🔇";
+</script>
+</body>
+</html>
