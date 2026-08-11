@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>그래프 경로 찾기 · 종목 6</title>
+<title>그래프 징검다리 · 종목 6</title>
 <link rel="stylesheet" href="../css/style.css?v=2">
 </head>
 <body>
@@ -18,7 +18,7 @@
   </div>
 
   <div class="overlay-panel" id="loadingPanel">
-    <h2>📊 그래프 경로 찾기</h2>
+    <h2>📊 그래프 징검다리</h2>
     <p id="loadingText">준비 중…</p>
   </div>
 
@@ -40,8 +40,8 @@
     <h2 id="resultTitle">결과</h2>
     <div class="medal" id="resultMedal">🥉</div>
     <div class="result-stats">
-      <div class="stat-box"><div class="num" id="statCount">0개</div><div class="label">기록</div></div>
-      <div class="stat-box"><div class="num" id="statBest">0개</div><div class="label">최고 기록</div></div>
+      <div class="stat-box"><div class="num" id="statCount">0번</div><div class="label">기록</div></div>
+      <div class="stat-box"><div class="num" id="statBest">0번</div><div class="label">최고 기록</div></div>
       <div class="stat-box"><div class="num" id="statCombo">0</div><div class="label">최고 콤보</div></div>
     </div>
     <video class="preview" id="previewVideo" controls playsinline style="display:none"></video>
@@ -68,26 +68,26 @@ import {
   drawVignette, spawnConfetti, updateConfetti, drawConfetti,
 } from "../js/engine.js?v=2";
 import {
-  CUTE, LANE_COLORS, LANE_DARK, bob, drawSticker, drawStickerRect, drawChunkyText,
+  CUTE, LANE_COLORS, bob, drawSticker, drawStickerRect, drawChunkyText,
   drawSparkle, spawnSparkles, updateSparkles, drawSparkles, makeDrifters, drawDrifters,
-  drawBunting, drawGloveCursor, drawCuteBanner, drawLevelStars,
+  drawBunting, drawGloveCursor, drawLevelStars,
 } from "../js/cute.js?v=2";
 requestWakeLock();
 
 const UNIT = "m6";
-const TITLE = "그래프 경로 찾기";
-const RECORD_SUFFIX = "개 도착";
+const TITLE = "그래프 징검다리";
+const RECORD_SUFFIX = "번 건너기";
 const MEDALS = { bronze: 4, silver: 7, gold: 10 };
 const mode = InputMode.get();
 
 const video = document.getElementById("video");
 const canvas = document.getElementById("gameCanvas");
 let dims = fitCanvasToScreen(canvas);
-let drifters = makeDrifters(16, dims.w, dims.h);
+let drifters = makeDrifters(14, dims.w, dims.h);
 window.addEventListener("resize", () => {
   dims = fitCanvasToScreen(canvas);
-  drifters = makeDrifters(16, dims.w, dims.h);
-  if (state === "playing") layoutPaths();
+  drifters = makeDrifters(14, dims.w, dims.h);
+  if (state === "playing") layoutStones();
 });
 
 const sound = new SoundKit();
@@ -122,33 +122,24 @@ function genRound(level) {
   }
 
   const rows = picked.map(([name, icon], i) => ({ name, icon, value: values[i] }));
-
-  let question, answerIdx;
   const maxIdx = rows.reduce((b, r, i) => (r.value > rows[b].value ? i : b), 0);
   const minIdx = rows.reduce((b, r, i) => (r.value < rows[b].value ? i : b), 0);
 
+  let question, answerIdx;
   if (level === 1) {
-    question = "가장 많은 것의 길로 가요";
+    question = "가장 많은 것";
     answerIdx = maxIdx;
   } else if (level === 2) {
-    if (Math.random() < 0.5) { question = "가장 적은 것의 길로 가요"; answerIdx = minIdx; }
-    else {
-      answerIdx = randInt(0, n - 1);
-      question = `${rows[answerIdx].value}${topic.unit}인 것의 길로 가요`;
-    }
+    if (Math.random() < 0.5) { question = "가장 적은 것"; answerIdx = minIdx; }
+    else { answerIdx = randInt(0, n - 1); question = `${rows[answerIdx].value}${topic.unit}인 것`; }
   } else {
-    const r = Math.random();
-    if (r < 0.34) {
-      const sorted = [...rows].map((x, i) => ({ i, v: x.value })).sort((a, b) => b.v - a.v);
+    if (Math.random() < 0.5) {
+      const sorted = rows.map((x, i) => ({ i, v: x.value })).sort((a, b) => b.v - a.v);
       answerIdx = sorted[1].i;
-      question = "두 번째로 많은 것의 길로 가요";
-    } else if (r < 0.67) {
-      answerIdx = randInt(0, n - 1);
-      question = `${rows[answerIdx].value}${topic.unit}인 것의 길로 가요`;
+      question = "두 번째로 많은 것";
     } else {
-      answerIdx = maxIdx;
-      const diff = rows[maxIdx].value - rows[minIdx].value;
-      question = `가장 많은 것과 가장 적은 것의 차가 ${diff}${topic.unit} 이에요. 많은 쪽 길로!`;
+      answerIdx = randInt(0, n - 1);
+      question = `${rows[answerIdx].value}${topic.unit}인 것`;
     }
   }
 
@@ -185,42 +176,44 @@ let state = "loading";
 const holdFill = document.getElementById("holdFill");
 const startGate = new StartGate(mode, holdFill);
 
-let autoDiff, count, combo, maxCombo, playEndAt, round, paths, active, progress, strayMs, resolving, roundAt;
+let autoDiff, count, combo, maxCombo, playEndAt;
+let round, lanes, active, stepIdx, resolving, roundAt, wrongFlashUntil = 0;
 let popups = [], bigPopups = [], confetti = [], sparks = [];
 const shake = new ScreenShake();
 let recorder, comboShot, fallbackShot, autoRec, recordedBlob = null;
 const recIndicator = document.getElementById("recIndicator");
 let cursors = [];
 
+// 화면을 위아래로 나눈다. 위에는 "문제 + 그래프"를 한 덩어리로 붙여 두고,
+// 손은 아래쪽에서만 움직이게 해서 조작하는 동안에도 문제가 계속 눈에 들어오게 한다.
+function topBand() { return { y0: dims.h * 0.02, y1: dims.h * 0.40 }; }
+function stoneR() { return fluidPx(dims, 32, { min: 24, max: 46 }); }
 
-
-// 경로는 좌→우로 흐르되 사인파 위상을 달리해 서로 교차시킨다 — 눈으로만 따라가면 헷갈리게
-function layoutPaths() {
+function layoutStones() {
   const { w, h } = dims;
-  const x0 = w * 0.14, x1 = w * 0.90;
-  const yTop = h * 0.52, yBot = h * 0.93;
   const n = round.rows.length;
-  const STEPS = 90;
-  paths = round.rows.map((row, i) => {
-    const baseY = yTop + ((i + 0.5) / n) * (yBot - yTop);
-    const amp = (yBot - yTop) / n * (0.85 + (i % 2) * 0.5);
-    const phase = i * 1.7;
-    const cycles = 1.5 + (i % 3) * 0.5;
-    const pts = [];
-    for (let s = 0; s <= STEPS; s++) {
-      const t = s / STEPS;
-      const x = x0 + (x1 - x0) * t;
-      const y = baseY + Math.sin(phase + t * Math.PI * 2 * cycles) * amp * Math.sin(Math.PI * t);
-      pts.push({ x, y: Math.max(yTop * 0.98, Math.min(yBot, y)) });
+  const stepCount = autoDiff.level === 1 ? 4 : 5;
+  const y0 = h * 0.46, y1 = h * 0.95;
+  const x0 = w * 0.20, x1 = w * 0.88;
+  lanes = round.rows.map((row, i) => {
+    const baseY = y0 + ((i + 0.5) / n) * (y1 - y0);
+    const stones = [];
+    for (let s = 0; s < stepCount; s++) {
+      const t = stepCount === 1 ? 0 : s / (stepCount - 1);
+      stones.push({
+        x: x0 + (x1 - x0) * t,
+        // 살짝 지그재그로 놓아 징검다리처럼 보이게 (줄끼리는 겹치지 않는다)
+        y: baseY + Math.sin(s * 1.7 + i) * ((y1 - y0) / n) * 0.14,
+      });
     }
-    return { pts, color: LANE_COLORS[i % LANE_COLORS.length], row, idx: i };
+    return { row, idx: i, stones, color: LANE_COLORS[i % LANE_COLORS.length], startX: w * 0.085, startY: baseY };
   });
 }
 
 function newRound() {
   round = genRound(autoDiff.level);
-  layoutPaths();
-  active = -1; progress = 0; strayMs = 0;
+  active = -1; stepIdx = 0;
+  layoutStones();
   resolving = false;
   roundAt = performance.now();
 }
@@ -273,28 +266,29 @@ function beginPlay() {
 function arrived() {
   if (resolving) return;
   resolving = true;
-  const p = paths[active].pts[paths[active].pts.length - 1];
+  const st = lanes[active].stones[lanes[active].stones.length - 1];
   count++; combo++;
   if (combo > maxCombo) { maxCombo = combo; comboShot.capture(canvas); }
   autoDiff.reportCorrect();
   autoRec.trigger();
   shake.trigger(7, 160);
-  spawnSparkles(sparks, p.x, p.y, 22, ["#fff", CUTE.sun, CUTE.green]);
-  spawnConfetti(confetti, p.x, p.y, 36);
-  spawnBigPopup(bigPopups, dims.w / 2, dims.h * 0.44, `도착! ${count}개`, CUTE.sun);
+  spawnSparkles(sparks, st.x, st.y, 22, ["#fff", CUTE.sun, CUTE.green]);
+  spawnConfetti(confetti, st.x, st.y, 36);
+  spawnBigPopup(bigPopups, dims.w / 2, dims.h * 0.44, `${count}번 건넜다!`, CUTE.sun);
   if (!isMuted()) { sound.success(); if (combo >= 3 && combo % 3 === 0) sound.fever(); }
   setTimeout(() => { if (state === "playing") newRound(); }, 800);
 }
 
-function wrongStart(p) {
+function wrongLane(st) {
   if (resolving) return;
   resolving = true;
   combo = 0;
   autoDiff.reportWrong();
-  shake.trigger(3, 140);
-  spawnPopup(popups, p.x, p.y - 32, "그래프를 다시 봐요!", CUTE.red);
+  shake.trigger(4, 150);
+  wrongFlashUntil = performance.now() + 450;
+  spawnPopup(popups, st.x, st.y - 34, "그래프를 다시 봐요!", CUTE.red);
   if (!isMuted()) sound.fizzle();
-  setTimeout(() => { if (state === "playing") newRound(); }, 640);
+  setTimeout(() => { if (state === "playing") newRound(); }, 700);
 }
 
 function endGame() {
@@ -307,8 +301,8 @@ function endGame() {
   }
   document.getElementById("resultMedal").textContent = medal;
   document.getElementById("resultTitle").textContent = `${label}! 수고했어요`;
-  document.getElementById("statCount").textContent = count + "개";
-  document.getElementById("statBest").textContent = best + "개";
+  document.getElementById("statCount").textContent = count + "번";
+  document.getElementById("statBest").textContent = best + "번";
   document.getElementById("statCombo").textContent = "🔥" + maxCombo;
 
   const shot = comboShot.captured ? comboShot : fallbackShot;
@@ -321,10 +315,10 @@ function endGame() {
   }
   document.getElementById("savePhotoBtn").onclick = async () => {
     const blob = await shot.toBlob((c, w, h) => drawPhotoOverlay(c, w, h, { title: TITLE, record: count + RECORD_SUFFIX, medal }));
-    downloadBlob(blob, `수학체육올림픽_그래프경로_${formatFileTimestamp()}.png`);
+    downloadBlob(blob, `수학체육올림픽_그래프징검다리_${formatFileTimestamp()}.png`);
   };
   document.getElementById("saveVideoBtn").onclick = () => {
-    if (recordedBlob) downloadBlob(recordedBlob, `수학체육올림픽_그래프경로_${formatFileTimestamp()}.${recorder.extension}`);
+    if (recordedBlob) downloadBlob(recordedBlob, `수학체육올림픽_그래프징검다리_${formatFileTimestamp()}.${recorder.extension}`);
   };
   document.getElementById("resultPanel").style.display = "flex";
   if (!isMuted()) sound.success();
@@ -341,45 +335,64 @@ document.getElementById("raisePanel").addEventListener("click", () => {
   if (state === "raise" && mode !== "motion") goReady();
 });
 
-// 그림그래프: 큰 그림 1개 = 10, 작은 그림 1개 = 1
-function drawPictograph(ctx) {
-  const { w, h } = dims;
-  const rows = round.rows;
-  const x = w * 0.06, yTop = h * 0.235;
-  const rowH = fluidPx(dims, 30, { min: 21, max: 40 });
-  const big = fluidPx(dims, 22, { min: 15, max: 29 });
-  const small = fluidPx(dims, 12, { min: 8, max: 16 });
-  const boxW = Math.min(w * 0.62, fluidPx(dims, 430, { min: 260, max: 560 }));
-  const boxH = rowH * rows.length + fluidPx(dims, 26, { min: 18, max: 34 });
+// 문제와 그림그래프를 한 판에 담아 화면 위쪽에 고정한다.
+// 예전에는 문제가 상단 배너, 그래프가 왼쪽, 조작이 아래라 시선이 세 군데로 흩어졌다.
+function drawTopPanel(ctx, remain) {
+  const { w } = dims;
+  const band = topBand();
+  const boxW = w * 0.94, boxH = band.y1 - band.y0;
+  const cx = w / 2, cy = band.y0 + boxH / 2;
+  drawStickerRect(ctx, cx, cy, boxW, boxH, fluidPx(dims, 22, { min: 14, max: 30 }), CUTE.cream, {
+    lineWidth: fluidPx(dims, 5, { min: 3.5, max: 7 }), drop: fluidPx(dims, 6, { min: 4, max: 9 }),
+  });
 
-  drawStickerRect(ctx, x + boxW / 2, yTop + boxH / 2, boxW, boxH, 20, CUTE.cream, { lineWidth: 5, drop: 6 });
+  const left = cx - boxW / 2;
+  const padX = fluidPx(dims, 20, { min: 13, max: 28 });
+  let y = band.y0 + fluidPx(dims, 28, { min: 19, max: 36 });
+
+  // 무엇을 찾아야 하는지가 가장 크게 보여야 한다
+  drawChunkyText(ctx, `${round.question}의 징검다리를 건너요!`, cx, y, fluidPx(dims, 27, { min: 17, max: 34 }), CUTE.sun, {
+    outline: CUTE.ink, outlineWidth: fluidPx(dims, 6, { min: 4, max: 8 }),
+  });
+  y += fluidPx(dims, 25, { min: 17, max: 33 });
+
   ctx.save();
   ctx.textBaseline = "middle";
-  ctx.fillStyle = CUTE.ink;
+  ctx.fillStyle = CUTE.orangeDark;
+  ctx.font = `900 ${fluidPx(dims, 14, { min: 10, max: 18 })}px sans-serif`;
   ctx.textAlign = "left";
-  ctx.font = `900 ${fluidPx(dims, 13, { min: 9, max: 17 })}px sans-serif`;
-  ctx.fillText(`● = 10${round.unit}   ○ = 1${round.unit}`, x + 12, yTop + fluidPx(dims, 14, { min: 10, max: 19 }));
+  ctx.fillText(`● = 10${round.unit}   ○ = 1${round.unit}`, left + padX, y);
+  ctx.textAlign = "right";
+  ctx.fillText(`🔥 ${combo}   🏅 ${count}번   ⏱ ${Math.ceil(remain / 1000)}초`, left + boxW - padX, y);
+  ctx.restore();
+  y += fluidPx(dims, 15, { min: 10, max: 20 });
 
+  // 그림그래프 — 줄 색이 아래 징검다리 색과 같아서 어느 줄인지 바로 이어진다
+  const rows = round.rows;
+  const rowH = (band.y1 - y - fluidPx(dims, 12, { min: 8, max: 16 })) / rows.length;
+  const big = Math.min(fluidPx(dims, 20, { min: 13, max: 26 }), rowH * 0.7);
+  const small = big * 0.5;
+  ctx.save();
+  ctx.textBaseline = "middle";
   rows.forEach((r, i) => {
-    const y = yTop + fluidPx(dims, 26, { min: 18, max: 34 }) + rowH * i + rowH / 2;
-    ctx.fillStyle = LANE_COLORS[i % LANE_COLORS.length];
-    ctx.beginPath(); ctx.arc(x + 16, y, 6, 0, Math.PI * 2); ctx.fill();
-
+    const ry = y + rowH * i + rowH / 2;
+    drawSticker(ctx, left + padX + big * 0.4, ry, big * 0.42, LANE_COLORS[i % LANE_COLORS.length], { lineWidth: 2.5, drop: 2 });
     ctx.fillStyle = CUTE.ink;
-    ctx.font = `900 ${fluidPx(dims, 15, { min: 11, max: 20 })}px sans-serif`;
-    ctx.fillText(`${r.icon} ${r.name}`, x + 28, y);
+    ctx.textAlign = "left";
+    ctx.font = `900 ${Math.min(fluidPx(dims, 16, { min: 11, max: 21 }), rowH * 0.58)}px sans-serif`;
+    ctx.fillText(`${r.icon} ${r.name}`, left + padX + big * 1.1, ry);
 
-    let gx = x + fluidPx(dims, 130, { min: 92, max: 168 });
+    let gx = left + padX + fluidPx(dims, 140, { min: 100, max: 182 });
     const tens = Math.floor(r.value / 10), ones = r.value % 10;
     for (let t = 0; t < tens; t++) {
-      ctx.beginPath(); ctx.arc(gx, y, big / 2, 0, Math.PI * 2);
+      ctx.beginPath(); ctx.arc(gx, ry, big / 2, 0, Math.PI * 2);
       ctx.fillStyle = LANE_COLORS[i % LANE_COLORS.length]; ctx.fill();
       ctx.lineWidth = 2; ctx.strokeStyle = CUTE.ink; ctx.stroke();
       gx += big + 3;
     }
     gx += 4;
     for (let o = 0; o < ones; o++) {
-      ctx.beginPath(); ctx.arc(gx, y, small / 2, 0, Math.PI * 2);
+      ctx.beginPath(); ctx.arc(gx, ry, small / 2, 0, Math.PI * 2);
       ctx.fillStyle = "#ffffff"; ctx.fill();
       ctx.lineWidth = 2; ctx.strokeStyle = CUTE.ink; ctx.stroke();
       gx += small + 2;
@@ -433,129 +446,118 @@ function stepGame() {
   const remain = Math.max(0, playEndAt - performance.now());
   if (remain <= 0) { endGame(); return; }
 
-  const nodeR = fluidPx(dims, 26, { min: 19, max: 36 });
-  const tol = fluidPx(dims, 46, { min: 32, max: 64 }) * (autoDiff.level === 3 ? 0.78 : 1);
-
-  drawPictograph(ctx);
-
-  // 새 문제가 뜬 직후엔 잠깐 입력을 받지 않는다 — 손이 우연히 노드 위에 있었다고
-  // 문제를 읽어보기도 전에 오답 처리되면 아이 입장에서는 억울하다
+  const R = stoneR();
   const armed = performance.now() - roundAt > 550;
 
-  // 출발 노드를 고르기 전: 어느 길로 갈지 결정하는 단계
-  if (armed && !resolving && active === -1) {
+  // 선을 따라 손을 계속 붙이고 가는 방식은 인식이 자주 끊겨 어려웠다.
+  // 지금은 발판을 "순서대로 콕콕 짚기"라서, 손이 발판 위를 지나가기만 하면 밟힌다.
+  if (armed && !resolving) {
     outer:
     for (const c of cursors) {
-      for (const p of paths) {
-        const s = p.pts[0];
-        if (Math.hypot(c.x - s.x, c.y - s.y) < nodeR * 1.25) {
-          if (p.idx === round.answerIdx) {
-            active = p.idx; progress = 0; strayMs = 0;
-            if (!isMuted()) sound.click();
-          } else {
-            wrongStart(s);
+      if (active === -1) {
+        // 아직 줄을 안 골랐으면 각 줄의 첫 발판만 받는다
+        for (const ln of lanes) {
+          const st = ln.stones[0];
+          if (Math.hypot(c.x - st.x, c.y - st.y) < R * 1.2) {
+            if (ln.idx === round.answerIdx) {
+              active = ln.idx; stepIdx = 1;
+              spawnSparkles(sparks, st.x, st.y, 8, ["#fff", ln.color]);
+              if (!isMuted()) sound.click();
+            } else {
+              wrongLane(st);
+            }
+            break outer;
           }
+        }
+      } else {
+        // 고른 줄의 "다음 발판"만 인식한다 — 엉뚱한 곳을 스쳐도 실패하지 않는다
+        const ln = lanes[active];
+        const st = ln.stones[stepIdx];
+        if (st && Math.hypot(c.x - st.x, c.y - st.y) < R * 1.2) {
+          stepIdx++;
+          spawnSparkles(sparks, st.x, st.y, 8, ["#fff", ln.color]);
+          if (!isMuted()) sound.pop();
+          if (stepIdx >= ln.stones.length) { arrived(); return; }
           break outer;
         }
       }
     }
-  } else if (!resolving && active !== -1) {
-    // 추적 단계: 손이 지금 지점 근처면 앞으로 나아간다. 한 프레임에 몇 칸까지만 —
-    // 교차점에서 다른 길로 건너뛰어 지름길을 타는 걸 막는다.
-    const pts = paths[active].pts;
-    let advanced = false;
-    for (const c of cursors) {
-      const maxJump = 4;
-      for (let k = Math.min(progress + maxJump, pts.length - 1); k > progress; k--) {
-        if (Math.hypot(c.x - pts[k].x, c.y - pts[k].y) < tol) { progress = k; advanced = true; break; }
+  }
+
+  drawTopPanel(ctx, remain);
+
+  for (const ln of lanes) {
+    const isActive = ln.idx === active;
+    const dim = active !== -1 && !isActive;
+    ctx.save();
+    ctx.globalAlpha = dim ? 0.22 : 1;
+
+    // 발판을 잇는 옅은 길
+    ctx.beginPath();
+    ln.stones.forEach((st, i) => (i === 0 ? ctx.moveTo(st.x, st.y) : ctx.lineTo(st.x, st.y)));
+    ctx.strokeStyle = "rgba(34,48,92,0.3)";
+    ctx.lineWidth = R * 0.3; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.stroke();
+
+    // 출발 아이콘 (그래프의 그 항목)
+    drawSticker(ctx, ln.startX, ln.startY, R * 0.82, ln.color, { lineWidth: Math.max(3, R * 0.14) });
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.font = `${R * 0.78}px sans-serif`;
+    ctx.fillText(ln.row.icon, ln.startX, ln.startY);
+
+    ln.stones.forEach((st, i) => {
+      const isNext = isActive ? i === stepIdx : (active === -1 && i === 0);
+      const done = isActive && i < stepIdx;
+      const by = isNext ? bob(2.2, R * 0.12, i) : 0;
+      const rr = isNext ? R * 1.08 : R;
+      drawSticker(ctx, st.x, st.y + by, rr, done ? CUTE.sun : ln.color, { lineWidth: Math.max(3, rr * 0.14) });
+      if (done) drawSparkle(ctx, st.x, st.y + by, rr * 0.6, "#fff", 0.4);
+      else drawChunkyText(ctx, String(i + 1), st.x, st.y + by, rr * 0.72, "#fff", { outlineWidth: Math.max(3, rr * 0.16) });
+
+      // 다음에 밟을 발판은 링을 둘러 한눈에 보이게
+      if (isNext) {
+        ctx.save();
+        ctx.beginPath(); ctx.arc(st.x, st.y + by, rr + R * 0.24, 0, Math.PI * 2);
+        ctx.strokeStyle = CUTE.sun; ctx.lineWidth = Math.max(3, R * 0.12);
+        ctx.setLineDash([R * 0.35, R * 0.28]);
+        ctx.stroke();
+        ctx.restore();
       }
-      if (!advanced && Math.hypot(c.x - pts[progress].x, c.y - pts[progress].y) < tol) advanced = true;
-    }
-    if (advanced) strayMs = 0;
-    else {
-      strayMs += dt * 1000;
-      // 손을 놓친 채 오래 있으면 출발점으로 되돌린다 (실패가 아니라 다시 도전)
-      if (strayMs > 900) { progress = 0; strayMs = 0; spawnPopup(popups, pts[0].x, pts[0].y - 30, "길을 벗어났어요", CUTE.sun); }
-    }
-    if (progress >= pts.length - 1) { arrived(); return; }
-  }
+    });
 
-  // 길 그리기
-  for (const p of paths) {
-    const isActive = p.idx === active;
-    ctx.save();
-    ctx.lineCap = "round"; ctx.lineJoin = "round";
-    ctx.globalAlpha = active === -1 || isActive ? 1 : 0.28;
-    ctx.strokeStyle = "rgba(29,43,77,0.55)";
-    ctx.lineWidth = fluidPx(dims, 18, { min: 12, max: 26 });
-    ctx.beginPath();
-    p.pts.forEach((pt, i) => (i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y)));
-    ctx.stroke();
-    ctx.strokeStyle = p.color;
-    ctx.lineWidth = fluidPx(dims, 11, { min: 7, max: 17 });
-    ctx.setLineDash(isActive ? [] : [14, 10]);
-    ctx.beginPath();
-    p.pts.forEach((pt, i) => (i === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y)));
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.restore();
-
-    // 출발 노드 — 아직 안 골랐으면 통통 튀면서 "여기를 짚어!"라고 알린다
-    const s = p.pts[0], e = p.pts[p.pts.length - 1];
-    const sy = active === -1 ? bob(1.5, nodeR * 0.13, p.idx * 1.4) : 0;
-    drawSticker(ctx, s.x, s.y + sy, nodeR, p.color, { lineWidth: Math.max(3.5, nodeR * 0.16) });
-    drawSticker(ctx, s.x, s.y + sy, nodeR * 0.72, CUTE.cream, { lineWidth: 2.5, gloss: false, drop: 0 });
-    ctx.save();
+    // 도착 깃발
+    const last = ln.stones[ln.stones.length - 1];
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.font = `${nodeR * 0.86}px sans-serif`;
-    ctx.fillText(p.row.icon, s.x, s.y + sy);
-    ctx.restore();
-
-    // 도착 노드
-    drawSticker(ctx, e.x, e.y, nodeR * 0.95, isActive ? CUTE.sun : "rgba(255,253,243,0.8)", { lineWidth: Math.max(3.5, nodeR * 0.15) });
-    ctx.save();
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.font = `${nodeR * 0.86}px sans-serif`;
-    ctx.fillText("🏁", e.x, e.y);
+    ctx.font = `${R * 0.9}px sans-serif`;
+    ctx.fillText("🏁", Math.min(w - R * 0.6, last.x + R * 1.6), last.y);
     ctx.restore();
   }
 
-  // 진행한 만큼 굵게 덧칠 + 러너 위치
-  if (active !== -1) {
-    const pts = paths[active].pts;
+  if (performance.now() < wrongFlashUntil) {
     ctx.save();
-    ctx.lineCap = "round"; ctx.lineJoin = "round";
-    ctx.strokeStyle = CUTE.sun;
-    ctx.lineWidth = fluidPx(dims, 13, { min: 9, max: 20 });
-    ctx.beginPath();
-    for (let i = 0; i <= progress; i++) (i === 0 ? ctx.moveTo(pts[i].x, pts[i].y) : ctx.lineTo(pts[i].x, pts[i].y));
-    ctx.stroke();
-    const cur = pts[progress];
-    ctx.font = `${fluidPx(dims, 32, { min: 22, max: 44 })}px sans-serif`;
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText("🏃", cur.x, cur.y);
+    ctx.fillStyle = "rgba(255,107,107,0.18)";
+    ctx.fillRect(0, 0, w, h);
     ctx.restore();
   }
 
-  sparks = updateSparkles(sparks, dt);
-  drawSparkles(ctx, sparks);
   confetti = updateConfetti(confetti, dt);
   drawConfetti(ctx, confetti);
+  sparks = updateSparkles(sparks, dt);
+  drawSparkles(ctx, sparks);
   popups = updatePopups(popups, dt);
   drawPopups(ctx, popups);
   bigPopups = updateBigPopups(bigPopups, dt);
   drawBigPopups(ctx, bigPopups);
 
-  drawVignette(ctx, w, h, 0.18);
-  const pct = active === -1 ? 0 : Math.round((progress / (paths[active].pts.length - 1)) * 100);
-  drawCuteBanner(ctx, dims, [
-    { text: round.question, size: 28, chunky: true, color: CUTE.sun },
-    { text: `🏁 ${pct}%   🔥 ${combo}   🏅 ${count}개   ⏱ ${Math.ceil(remain / 1000)}초`, size: 18, color: CUTE.orangeDark },
-    { text: active === -1
-        ? (mode === "motion" ? "정답 그림의 출발점을 손으로 짚어요!" : "정답 그림의 출발점을 탭!")
-        : (mode === "motion" ? "길을 벗어나지 말고 끝까지 손으로 따라가요!" : "길을 따라 드래그!"),
-      size: 14, weight: "700", color: "#5c6b8a" },
-  ], fluidPx);
+  drawVignette(ctx, w, h, 0.16);
+
+  // 조작 안내는 발판 바로 위에 둬서 시선이 위아래로 오가지 않게 한다
+  drawChunkyText(
+    ctx,
+    active === -1 ? "1번 발판부터 짚어요!" : "다음 번호를 순서대로 짚어요!",
+    w / 2, h * 0.43, fluidPx(dims, 17, { min: 12, max: 22 }), "#ffffff",
+    { outline: CUTE.ink, outlineWidth: fluidPx(dims, 5, { min: 3, max: 7 }) },
+  );
 
   drawLevelStars(ctx, dims, autoDiff.level, fluidPx);
 }

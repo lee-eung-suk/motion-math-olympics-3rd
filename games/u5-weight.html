@@ -188,21 +188,33 @@ const recIndicator = document.getElementById("recIndicator");
 let cursors = [];
 
 const CRATES = ["📦", "🧃", "🍯", "🪣", "🎒", "🥫"];
-function beltY() { return dims.h * 0.78; }
-function itemW() { return fluidPx(dims, 116, { min: 88, max: 168 }); }
-function itemH() { return fluidPx(dims, 66, { min: 52, max: 94 }); }
+// 상자가 하나씩 차례로 지나가면 기다렸다 고르기만 하면 되니 너무 쉬웠다.
+// 위·아래 두 줄이 서로 반대 방향으로 흐르게 해서, 여러 개를 한눈에 비교하고 골라야 하도록 바꿨다.
+function beltY(lane) { return dims.h * (lane === 0 ? 0.62 : 0.83); }
+function itemW() { return fluidPx(dims, 104, { min: 80, max: 148 }); }
+function itemH() { return fluidPx(dims, 58, { min: 46, max: 82 }); }
 
 function newRound() {
   round = genRound(autoDiff.level);
-  const gap = itemW() * 1.28;
-  const vals = shuffle([round.answer, ...round.wrongs.slice(0, 4)]);
+  const iw = itemW();
+  const gap = iw * 1.55; // 판정 반경(iw*0.6)의 두 배보다 넉넉히 벌려서 옆 상자와 헷갈리지 않게 한다
+  const vals = shuffle([round.answer, ...round.wrongs.slice(0, 5)]);
   const faces = shuffle([...CRATES]);
-  items = vals.map((v, i) => ({
-    v, correct: v === round.answer,
-    x: dims.w + gap * i + itemW(),
-    face: faces[i % faces.length],
-    dead: false,
-  }));
+  // 정답이 어느 줄에 있을지 매번 달라지므로 두 줄을 모두 살펴야 한다
+  const answerLane = Math.random() < 0.5 ? 0 : 1;
+  let n0 = 0, n1 = 0;
+  items = vals.map((v) => {
+    const correct = v === round.answer;
+    const lane = correct ? answerLane : (n0 <= n1 ? 0 : 1);
+    const slot = lane === 0 ? n0++ : n1++;
+    return {
+      v, correct, lane,
+      // 위 줄은 오른쪽 밖에서, 아래 줄은 왼쪽 밖에서 들어온다
+      x: lane === 0 ? dims.w + iw + gap * slot : -iw - gap * slot,
+      face: faces[(v + slot) % faces.length],
+      dead: false,
+    };
+  });
   resolving = false;
   tiltTarget = -0.16; // 오른쪽 접시가 비어 있으니 왼쪽으로 기울어 있다
 }
@@ -263,7 +275,7 @@ function pick(it) {
     autoRec.trigger();
     tiltTarget = 0; // 딱 맞으면 저울이 수평이 된다
     shake.trigger(7, 160);
-    spawnSparkles(sparks, it.x, beltY(), 18, ["#fff", CUTE.sun, CUTE.green]);
+    spawnSparkles(sparks, it.x, beltY(it.lane), 18, ["#fff", CUTE.sun, CUTE.green]);
     spawnConfetti(confetti, dims.w / 2, dims.h * 0.34, 32);
     spawnBigPopup(bigPopups, dims.w / 2, dims.h * 0.46, `균형! ${count}번`, CUTE.sun);
     if (!isMuted()) { sound.pop(); sound.correct(); if (combo >= 3 && combo % 3 === 0) sound.fever(); }
@@ -273,7 +285,7 @@ function pick(it) {
     autoDiff.reportWrong();
     tiltTarget = 0.3; // 무게가 안 맞으면 반대로 확 기운다
     shake.trigger(4, 150);
-    spawnPopup(popups, it.x, beltY() - 40, "안 맞아요!", CUTE.red);
+    spawnPopup(popups, it.x, beltY(it.lane) - 40, "안 맞아요!", CUTE.red);
     if (!isMuted()) sound.fizzle();
     setTimeout(() => { if (state === "playing") newRound(); }, 640);
   }
@@ -284,7 +296,7 @@ function missed() {
   resolving = true;
   combo = 0;
   autoDiff.reportWrong();
-  spawnPopup(popups, dims.w / 2, beltY() - 50, "지나갔어요!", CUTE.red);
+  spawnPopup(popups, dims.w / 2, dims.h * 0.72, "지나갔어요!", CUTE.red);
   if (!isMuted()) sound.fizzle();
   setTimeout(() => { if (state === "playing") newRound(); }, 480);
 }
@@ -336,7 +348,7 @@ document.getElementById("raisePanel").addEventListener("click", () => {
 // 양팔 저울: 기울기 tilt(라디안)에 따라 두 접시가 오르내린다
 function drawScale(ctx) {
   const { w, h } = dims;
-  const cx = w * 0.5, cy = h * 0.34;
+  const cx = w * 0.5, cy = h * 0.28;
   const arm = Math.min(w * 0.22, fluidPx(dims, 190, { min: 110, max: 240 }));
   const panR = fluidPx(dims, 44, { min: 32, max: 62 });
 
@@ -395,19 +407,31 @@ function drawScale(ctx) {
 
 function drawBelt(ctx) {
   const { w } = dims;
-  const y = beltY(), ih = itemH();
-  ctx.save();
-  ctx.fillStyle = "rgba(34,48,92,0.6)";
-  ctx.fillRect(0, y + ih * 0.52, w, fluidPx(dims, 22, { min: 14, max: 30 }));
-  ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 3;
+  const ih = itemH();
+  const beltH = fluidPx(dims, 20, { min: 13, max: 27 });
   const step = fluidPx(dims, 40, { min: 26, max: 56 });
-  for (let x = -step + (beltPhase % step); x < w; x += step) {
-    ctx.beginPath();
-    ctx.moveTo(x, y + ih * 0.52);
-    ctx.lineTo(x + step * 0.4, y + ih * 0.52 + fluidPx(dims, 22, { min: 14, max: 30 }));
-    ctx.stroke();
+  for (const lane of [0, 1]) {
+    const y = beltY(lane) + ih * 0.52;
+    // 빗금이 흐르는 방향으로 줄마다 반대로 기울어, 어느 쪽으로 가는 벨트인지 눈에 보인다
+    const dir = lane === 0 ? -1 : 1;
+    const phase = ((beltPhase * dir) % step + step) % step;
+    ctx.save();
+    ctx.fillStyle = "rgba(34,48,92,0.6)";
+    ctx.fillRect(0, y, w, beltH);
+    ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 3;
+    for (let x = -step + phase; x < w; x += step) {
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + step * 0.4 * dir, y + beltH);
+      ctx.stroke();
+    }
+    // 흐르는 방향 화살표
+    ctx.fillStyle = "rgba(255,255,255,0.5)";
+    ctx.font = `900 ${beltH * 0.8}px sans-serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(dir < 0 ? "◀" : "▶", dir < 0 ? w * 0.04 : w * 0.96, y + beltH / 2);
+    ctx.restore();
   }
-  ctx.restore();
 }
 
 function loop(tsMs) {
@@ -456,33 +480,42 @@ function stepGame() {
   if (remain <= 0) { endGame(); return; }
 
   // 레벨이 오를수록 벨트가 빨라진다 = 릴레이 속도 도전
-  const speed = fluidPx(dims, 118, { min: 80, max: 180 }) * (1 + autoDiff.level * 0.42);
-  beltPhase -= speed * dt;
+  const speed = fluidPx(dims, 92, { min: 66, max: 140 }) * (1 + autoDiff.level * 0.3);
+  beltPhase += speed * dt;
   tilt += (tiltTarget - tilt) * 0.12;
 
-  const iw = itemW(), ih = itemH(), y = beltY();
+  const iw = itemW(), ih = itemH();
   if (!resolving) {
-    for (const it of items) it.x -= speed * dt;
+    // 위 줄은 왼쪽으로, 아래 줄은 오른쪽으로 흐른다
+    for (const it of items) it.x += (it.lane === 0 ? -1 : 1) * speed * dt;
     const answerItem = items.find((i) => i.correct);
-    if (answerItem && answerItem.x < -iw) missed();
+    if (answerItem && (answerItem.x < -iw * 1.2 || answerItem.x > w + iw * 1.2)) missed();
   }
 
   drawScale(ctx);
   drawBelt(ctx);
 
+  // 상자 사이 간격이 판정 반경보다 좁아질 수 있어(특히 화면이 좁을 때), 손이 두 상자 사이에
+  // 걸치면 배열에서 먼저 나온 엉뚱한 상자가 판정을 가로챌 수 있었다.
+  // 그래서 범위 안에 든 상자 중 "가장 가까운 하나"를 고르도록 했다.
   if (!resolving) {
-    outer:
+    let best = null, bestD = Infinity;
     for (const c of cursors) {
       for (const it of items) {
         if (it.dead) continue;
-        if (Math.abs(c.x - it.x) < iw * 0.5 && Math.abs(c.y - y) < ih * 0.75) { c.over = true; pick(it); break outer; }
+        if (Math.abs(c.x - it.x) < iw * 0.6 && Math.abs(c.y - beltY(it.lane)) < ih * 0.85) {
+          const d = Math.hypot(c.x - it.x, c.y - beltY(it.lane));
+          if (d < bestD) { bestD = d; best = it; c.over = true; }
+        }
       }
     }
+    if (best) pick(best);
   }
 
   const crateTints = [CUTE.orange, CUTE.cyan, CUTE.pink, CUTE.purple, CUTE.blue];
   items.forEach((it, i) => {
-    if (it.dead || it.x < -iw || it.x > w + iw) return;
+    if (it.dead || it.x < -iw * 1.2 || it.x > w + iw * 1.2) return;
+    const y = beltY(it.lane);
     const by = bob(1.2, 3.5, it.x * 0.01);
     const tint = crateTints[i % crateTints.length];
     drawStickerRect(ctx, it.x, y + by, iw, ih, fluidPx(dims, 16, { min: 10, max: 22 }), CUTE.cream, {
@@ -492,15 +525,15 @@ function stepGame() {
     ctx.save();
     ctx.beginPath(); ctx.roundRect(it.x - iw / 2, y + by - ih / 2, iw, ih, fluidPx(dims, 16, { min: 10, max: 22 })); ctx.clip();
     ctx.fillStyle = tint;
-    ctx.fillRect(it.x - iw / 2, y + by - ih / 2, iw * 0.34, ih);
+    ctx.fillRect(it.x - iw / 2, y + by - ih / 2, iw * 0.32, ih);
     ctx.restore();
     ctx.save();
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.font = `${ih * 0.42}px sans-serif`;
-    ctx.fillText(it.face, it.x - iw * 0.32, y + by);
+    ctx.fillText(it.face, it.x - iw * 0.33, y + by);
     ctx.restore();
     const text = round.useBigForItems ? fmtBig(it.v, round.kind) : fmtSmall(it.v, round.kind);
-    drawChunkyText(ctx, text, it.x + iw * 0.1, y + by, fluidPx(dims, 21, { min: 14, max: 28 }), CUTE.ink, {
+    drawChunkyText(ctx, text, it.x + iw * 0.1, y + by, fluidPx(dims, 19, { min: 13, max: 25 }), CUTE.ink, {
       outline: "#fff", outlineWidth: 5,
     });
   });
@@ -518,7 +551,7 @@ function stepGame() {
   drawCuteBanner(ctx, dims, [
     { text: round.label, size: 32, chunky: true, color: CUTE.sun },
     { text: `🔥 ${combo}   🏅 ${count}번   ⏱ ${Math.ceil(remain / 1000)}초`, size: 18, color: CUTE.orangeDark },
-    { text: `1 kg = 1000 g, 1 L = 1000 mL · ${mode === "motion" ? "흘러가는 상자를 손으로 잡아요!" : "흘러가는 상자를 탭!"}`, size: 14, weight: "700", color: "#5c6b8a" },
+    { text: `1 kg = 1000 g, 1 L = 1000 mL · ${mode === "motion" ? "두 줄을 살펴보고 같은 양을 손으로 잡아요!" : "두 줄을 살펴보고 같은 양을 탭!"}`, size: 14, weight: "700", color: "#5c6b8a" },
   ], fluidPx);
 
   drawLevelStars(ctx, dims, autoDiff.level, fluidPx);

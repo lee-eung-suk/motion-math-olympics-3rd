@@ -80,6 +80,7 @@ const RECORD_SUFFIX = "코스 완주";
 const MEDALS = { bronze: 3, silver: 6, gold: 9 };
 const mode = InputMode.get();
 const TWO_PI = Math.PI * 2;
+const HOLD_MS = 700;   // 맞는 굴렁쇠에 손을 이만큼 대고 있으면 원이 완성된다
 
 const video = document.getElementById("video");
 const canvas = document.getElementById("gameCanvas");
@@ -98,7 +99,7 @@ function randInt(min, max) { return min + Math.floor(Math.random() * (max - min 
 function shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; }
 
 // 3학년 2학기 「원」 진도: 원의 중심·반지름·지름, 지름 = 반지름 × 2
-// 한 코스는 굴렁쇠 구간 여러 개로 이루어지고, 구간마다 조건에 맞는 크기의 굴렁쇠를 골라 한 바퀴 돌아야 한다.
+// 한 코스는 굴렁쇠 구간 여러 개로 이루어지고, 구간마다 조건에 맞는 크기의 굴렁쇠를 골라 손을 대고 있으면 된다.
 // 굴렁쇠끼리 몇 칸 떨어져 있느냐가 곧 난이도다.
 // 1단계는 2칸씩 벌려 한눈에 구분되고, 3단계는 1칸 간격으로 촘촘해 정밀하게 골라야 한다.
 const RING_SETS = {
@@ -167,14 +168,15 @@ function center() { return { cx: dims.w * 0.5, cy: dims.h * 0.60 }; }
 function cellPx() { return Math.min(dims.w, dims.h) * 0.052; }
 // 굴렁쇠가 최소 1칸 간격이므로 잡히는 범위(반두께)는 반칸보다 충분히 작아야
 // 어느 굴렁쇠를 돌고 있는지 헷갈리지 않는다
-function tolerance() { return cellPx() * (autoDiff.level === 1 ? 0.34 : autoDiff.level === 2 ? 0.30 : 0.26); }
+function tolerance() { return cellPx() * (autoDiff.level === 1 ? 0.40 : autoDiff.level === 2 ? 0.35 : 0.30); }
 
 function buildStage() {
   const st = course[stageIdx];
   rings = st.radii.map((cells, i) => ({
     cells, correct: cells === st.answer,
     color: LANE_COLORS[i % LANE_COLORS.length],
-    acc: 0, lastAng: null, startAng: 0,
+    hold: 0,           // 손을 대고 있는 시간 — 다 차면 그 굴렁쇠로 결정된다
+    handAng: -Math.PI / 2,
   }));
   roundAt = performance.now();
 }
@@ -381,8 +383,9 @@ function stepGame() {
 
   drawGrid(ctx, cx, cy, cell);
 
-  // 손이 어느 굴렁쇠 띠 위에 있는지 판정하고, 그 굴렁쇠의 누적 회전각을 쌓는다.
-  // 누적각은 부호가 있어서 왔다갔다 하면 서로 상쇄된다 = 한 방향으로 꾸준히 돌아야 한 바퀴가 된다.
+  // 손이 어느 굴렁쇠 위에 있는지만 본다.
+  // 원을 따라 한 바퀴 그리는 건 저학년 손에게 너무 어려워서, "맞는 굴렁쇠에 손을 잠깐 대고 있기"로 바꿨다.
+  // 중심에서 손까지의 거리가 곧 반지름이므로, 조작이 쉬워져도 배우는 것은 그대로다.
   let activeRing = null, activeCursor = null;
   if (!resolving && armed) {
     for (const c of cursors) {
@@ -392,22 +395,15 @@ function stepGame() {
       if (!hit) continue;
       c.onTrack = true;
       activeRing = hit; activeCursor = c;
-      const ang = Math.atan2(c.y - cy, c.x - cx);
-      if (hit.lastAng === null) { hit.lastAng = ang; hit.startAng = ang; }
-      else {
-        let d2 = ang - hit.lastAng;
-        while (d2 > Math.PI) d2 -= TWO_PI;
-        while (d2 < -Math.PI) d2 += TWO_PI;
-        if (Math.abs(d2) < 1.0) hit.acc += d2;   // 순간이동 같은 큰 점프는 무시
-        hit.lastAng = ang;
-      }
+      hit.handAng = Math.atan2(c.y - cy, c.x - cx);
+      hit.hold += dt * 1000;
       break;
     }
-    // 띠를 벗어난 굴렁쇠는 시작 각도를 잊는다 (진행도는 남겨 둬서 다시 붙으면 이어서 돈다)
-    for (const r of rings) if (r !== activeRing) r.lastAng = null;
+    // 손을 뗀 굴렁쇠는 천천히 식는다 — 잠깐 흔들려 벗어나도 처음부터 다시 하지 않아도 된다
+    for (const r of rings) if (r !== activeRing) r.hold = Math.max(0, r.hold - dt * 700);
 
     for (const r of rings) {
-      if (Math.abs(r.acc) >= TWO_PI - 0.05) {
+      if (r.hold >= HOLD_MS) {
         if (r.correct) stageCleared(); else wrongRing(r);
         break;
       }
@@ -438,15 +434,14 @@ function stepGame() {
     ctx.setLineDash([]);
     ctx.restore();
 
-    // 돈 만큼 색이 찬다
-    if (Math.abs(r.acc) > 0.02) {
-      const from = r.startAng;
-      const to = r.startAng + r.acc;
+    // 손을 대고 있는 동안 손 위치에서부터 원이 그려져 나간다 — 컴퍼스로 원을 그리는 모습
+    if (r.hold > 0) {
+      const t = Math.min(1, r.hold / HOLD_MS);
       ctx.save();
       ctx.beginPath();
-      ctx.arc(cx, cy, R, Math.min(from, to), Math.max(from, to));
+      ctx.arc(cx, cy, R, r.handAng, r.handAng + TWO_PI * t);
       ctx.strokeStyle = r.color;
-      ctx.lineWidth = hoopW;
+      ctx.lineWidth = hoopW + 2;
       ctx.lineCap = "round";
       ctx.stroke();
       ctx.restore();
@@ -455,8 +450,8 @@ function stepGame() {
     // 굴렁쇠 크기 표찰
     const lx = cx + Math.cos(-Math.PI / 4) * R;
     const ly = cy + Math.sin(-Math.PI / 4) * R;
-    drawSticker(ctx, lx, ly, fluidPx(dims, 17, { min: 12, max: 23 }), r.color, { lineWidth: 3, drop: 3 });
-    drawChunkyText(ctx, String(r.cells), lx, ly, fluidPx(dims, 17, { min: 12, max: 22 }), "#fff", { outlineWidth: 4 });
+    drawSticker(ctx, lx, ly, fluidPx(dims, 19, { min: 13, max: 26 }), r.color, { lineWidth: 3, drop: 3 });
+    drawChunkyText(ctx, String(r.cells), lx, ly, fluidPx(dims, 19, { min: 13, max: 24 }), "#fff", { outlineWidth: 4 });
   }
 
   // 중심점 + 반지름 자
@@ -501,11 +496,11 @@ function stepGame() {
 
   drawVignette(ctx, w, h, 0.2);
 
-  const laps = activeRing ? Math.min(1, Math.abs(activeRing.acc) / TWO_PI) : 0;
+  const laps = activeRing ? Math.min(1, activeRing.hold / HOLD_MS) : 0;
   drawCuteBanner(ctx, dims, [
     { text: `${stageIdx + 1}번 굴렁쇠 · ${stage.label}`, size: 34, chunky: true, color: CUTE.sun },
     { text: `🌀 ${Math.round(laps * 100)}%   🔥 ${combo}   🏅 ${count}코스   ⏱ ${Math.ceil(remain / 1000)}초`, size: 18, color: CUTE.orangeDark },
-    { text: `${stage.hint} · ${mode === "motion" ? "맞는 굴렁쇠 위를 손으로 한 바퀴!" : "맞는 굴렁쇠 위를 드래그로 한 바퀴!"}`, size: 14, weight: "700", color: "#5c6b8a" },
+    { text: `${stage.hint} · ${mode === "motion" ? "맞는 굴렁쇠에 손을 대고 가만히!" : "맞는 굴렁쇠를 누르고 가만히!"}`, size: 14, weight: "700", color: "#5c6b8a" },
   ], fluidPx);
 
   drawPips(ctx, dims, w / 2, h - fluidPx(dims, 26, { min: 18, max: 36 }), course.length, stageIdx, fluidPx);

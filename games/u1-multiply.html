@@ -97,8 +97,9 @@ document.getElementById("homeBtn2").addEventListener("click", () => { bgm.stop()
 function randInt(min, max) { return min + Math.floor(Math.random() * (max - min + 1)); }
 function shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; }
 
-// 3학년 2학기 「곱셈」 단원 진도에 맞춘 3단계
-//  1: (두 자리)×(한 자리) 올림 없음   2: (두 자리)×(한 자리) 올림 있음   3: (두 자리)×(두 자리)
+// 3학년 2학기 「곱셈」 단원 진도에 맞춘 3단계.
+// (두 자리)×(두 자리)는 암산으로 풀기 어려워 넣지 않고, 끝까지 (두 자리)×(한 자리)만 다룬다.
+//  1: 올림 없음   2: 일의 자리에서 한 번 올림   3: 올림이 여러 번
 function genQuestion(level) {
   if (level === 1) {
     let a, b;
@@ -108,10 +109,13 @@ function genQuestion(level) {
   }
   if (level === 2) {
     let a, b;
-    do { a = randInt(13, 89); b = randInt(3, 9); } while ((a % 10) * b < 10);
+    do { a = randInt(12, 41); b = randInt(2, 6); }
+    while ((a % 10) * b < 10 || Math.floor(a / 10) * b >= 10);
     return { text: `${a} × ${b}`, answer: a * b, a, b };
   }
-  const a = randInt(12, 49), b = randInt(11, 29);
+  let a, b;
+  do { a = randInt(23, 89); b = randInt(3, 9); }
+  while ((a % 10) * b < 10 || Math.floor(a / 10) * b < 10);
   return { text: `${a} × ${b}`, answer: a * b, a, b };
 }
 
@@ -425,7 +429,8 @@ function stepGame() {
   if (remain <= 0) { endGame(); return; }
 
   // 레벨이 오를수록 게이트가 빨리 다가온다 = 달리기 속도 도전
-  const approach = (0.30 + autoDiff.level * 0.055) / 60;
+  // 문제를 읽고 고를 시간이 있어야 하므로 1단계는 4초 넘게 다가오도록 느긋하게 잡는다
+  const approach = (0.20 + autoDiff.level * 0.045) / 60;
   if (!resolving) {
     for (const g of gates) g.z += approach;
     if (gates.every((g) => g.z > 1.02)) missAll();
@@ -437,7 +442,7 @@ function stepGame() {
       for (const g of gates) {
         if (g.dead || g.z < 0.22) continue;
         const p = gateScreenPos(g);
-        if (Math.hypot(c.x - p.x, c.y - p.y) < p.r * 0.95) { passGate(g); break outer; }
+        if (Math.hypot(c.x - p.x, c.y - p.y) < p.r * 1.15) { passGate(g); break outer; }
       }
     }
   }

@@ -262,7 +262,7 @@ function playArea() {
   const { w, h } = dims;
   return { x0: hasRefPanel() ? w * 0.27 : w * 0.10, x1: w * 0.90, y0: h * 0.32, y1: h * 0.86 };
 }
-function sliceR() { return fluidPx(dims, 46, { min: 34, max: 66 }); }
+function sliceR() { return fluidPx(dims, 50, { min: 38, max: 72 }); }
 
 function newRound() {
   round = genRound(autoDiff.level);
@@ -272,8 +272,8 @@ function newRound() {
     ...f,
     repr: pickRepr(f, round.allowed),
     x: rand(a.x0, a.x1), y: rand(a.y0, a.y1),
-    vx: rand(-1, 1) * (55 + autoDiff.level * 22),
-    vy: rand(-1, 1) * (45 + autoDiff.level * 18),
+    vx: rand(-1, 1) * (36 + autoDiff.level * 14),
+    vy: rand(-1, 1) * (30 + autoDiff.level * 12),
     born: performance.now() + i * 45,
     spin: rand(-0.5, 0.5),
     dead: false,
