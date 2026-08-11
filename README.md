@@ -92,9 +92,13 @@ rm -rf /tmp/mmo3 && mkdir -p /tmp/mmo3 && cp -R "/Users/mac/Desktop/클로드/mo
 
 브라우저에서 `http://localhost:8793` 접속. (카메라 권한이 필요한 모션인식 모드는 `localhost` 또는 HTTPS 환경에서만 정상 동작합니다.)
 
-## 🚀 배포
+## 🌐 배포된 주소
 
-1·2학년판과 동일하게 Vercel 등 정적 호스팅에 폴더째 올리면 됩니다. 별도 빌드 명령어나 환경 변수 설정은 필요 없습니다.
+**https://motion-math-olympics-3rd.vercel.app**
+
+- GitHub: https://github.com/lee-eung-suk/motion-math-olympics-3rd
+- `main` 브랜치에 push하면 Vercel이 자동으로 다시 배포합니다.
+- 정적 사이트라 별도 빌드 명령어나 환경 변수 설정은 필요 없습니다.
 
 ---
 
