@@ -215,8 +215,11 @@ function newRound() {
       x: lane === 0 ? dims.w + iw + gap * slot : -iw - gap * slot,
       face: faces[(v + slot) % faces.length],
       // 상자마다 표기 방식(복합 단위 / 단일 단위)을 따로 뽑는다 — 숫자만 보고 맞히지 못하게,
-      // 값을 실제로 변환해서 비교해야 한다
-      format: Math.random() < 0.5 ? "big" : "small",
+      // 값을 실제로 변환해서 비교해야 한다.
+      // 정답 상자는 항상 "단일 단위"로 고정한다 — 문제가 이미 복합 단위(예: "5 kg")로 나오는데
+      // 정답 상자도 우연히 같은 복합 단위로 뽑히면 글자가 완전히 똑같아져 버려서(변환할 필요가
+      // 없어져서) 문제가 성립하지 않았다. "5kg을 찾아라" → 정답 상자는 반드시 "5000 g"로 보여준다.
+      format: correct ? "small" : (Math.random() < 0.5 ? "big" : "small"),
       dead: false,
     };
   });
@@ -494,7 +497,15 @@ function stepGame() {
     // 위 줄은 왼쪽으로, 아래 줄은 오른쪽으로 흐른다
     for (const it of items) it.x += (it.lane === 0 ? -1 : 1) * speed * dt;
     const answerItem = items.find((i) => i.correct);
-    if (answerItem && (answerItem.x < -iw * 1.2 || answerItem.x > w + iw * 1.2)) missed();
+    // 정답 상자가 "자기 줄이 실제로 나가는 쪽"을 완전히 지나쳤을 때만 놓친 것으로 본다.
+    // 예전엔 두 방향을 다 검사해서, 왼쪽으로 흐르는 줄(0번)의 정답이 화면 오른쪽 바깥
+    // 스폰 위치(슬롯이 뒤쪽일수록 더 멀리)에서 곧바로 "오른쪽 탈출" 기준을 넘어버려
+    // 등장하지도 못한 채 즉시 실패 → 다음 라운드도 같은 확률로 또 실패하며
+    // 문제가 연속으로 휙휙 넘어가 버리는 원인이었다.
+    const exited = answerItem && (answerItem.lane === 0
+      ? answerItem.x < -iw * 1.2
+      : answerItem.x > w + iw * 1.2);
+    if (exited) missed();
   }
 
   drawScale(ctx);
