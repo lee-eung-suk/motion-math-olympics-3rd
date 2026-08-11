@@ -365,7 +365,9 @@ function stepGame() {
   const a = playArea();
   const radius = fluidPx(dims, 50, { min: 38, max: 70 });
   const fleeRange = radius * 3.0;
-  const baseFlee = 110 + autoDiff.level * 30;
+  // 도망 속도를 기존의 2배로 — 잡기 훨씬 어려워진 만큼, 숨이 차서 느려지는 효과가
+  // 더 크게 느껴지도록 아래에서 스태미나 소모도 함께 키웠다
+  const baseFlee = 220 + autoDiff.level * 60;
   const wanderSpeed = 44 + autoDiff.level * 14;
   const armed = now - roundAt > 550;
 
@@ -394,8 +396,9 @@ function stepGame() {
       r.feintAt = now + rand(600, 1500);
     }
 
-    // 계속 쫓기면 숨이 차서 느려지고, 놓아주면 회복한다 — 끈질기게 쫓으면 반드시 잡힌다
-    if (chased) r.stamina = Math.max(0.3, r.stamina - dt * 0.45);
+    // 계속 쫓기면 숨이 차서 느려지고, 놓아주면 회복한다 — 끈질기게 쫓으면 반드시 잡힌다.
+    // 기본 속도가 2배로 빨라진 만큼, 지칠 때 더 크게 느려지도록 바닥값을 낮췄다
+    if (chased) r.stamina = Math.max(0.22, r.stamina - dt * 0.5);
     else r.stamina = Math.min(1, r.stamina + dt * 0.3);
 
     const fleeSpeed = baseFlee * r.speedMul * r.stamina;

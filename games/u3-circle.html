@@ -68,7 +68,7 @@ import {
   drawVignette, spawnConfetti, updateConfetti, drawConfetti,
 } from "../js/engine.js?v=2";
 import {
-  CUTE, LANE_COLORS, bob, drawSticker, drawChunkyText, drawSparkle,
+  CUTE, LANE_COLORS, bob, drawSticker, drawSparkle,
   spawnSparkles, updateSparkles, drawSparkles, makeDrifters, drawDrifters,
   drawBunting, drawGloveCursor, drawCuteBanner, drawPips, drawLevelStars,
 } from "../js/cute.js?v=2";
@@ -115,12 +115,13 @@ function genCourse(level) {
     const sets = RING_SETS[level];
     const pool = [...sets[randInt(0, sets.length - 1)]];
     const answer = pool[randInt(0, pool.length - 1)];
-    // 레벨이 오르면 "지름"으로 물어 반지름을 스스로 구하게 한다
+    // 레벨이 오르면 "지름"으로 물어 반지름을 스스로 구하게 한다.
+    // 정답 칸수는 절대 텍스트로 알려주지 않는다 — 화면의 점선 눈금을 학생이 직접 세어야 한다.
     const askDiameter = level === 1 ? false : level === 2 ? Math.random() < 0.5 : Math.random() < 0.65;
     stages.push({
-      radii: pool, answer,
-      label: askDiameter ? `지름 ${answer * 2}칸` : `반지름 ${answer}칸`,
-      hint: askDiameter ? "지름 = 반지름 × 2" : "반지름 = 가운데 점에서 원까지",
+      radii: pool, answer, askDiameter,
+      label: askDiameter ? "지름이 같은 굴렁쇠를 찾아요!" : "반지름이 같은 굴렁쇠를 찾아요!",
+      hint: askDiameter ? "지름 = 반지름 × 2 · 모눈을 세어 봐요!" : "가운데 점에서 표시된 점까지 모눈을 세어 봐요!",
     });
   }
   return stages;
@@ -265,7 +266,8 @@ function wrongRing(ring) {
   shake.trigger(4, 150);
   wrongFlashUntil = performance.now() + 500;
   const { cx, cy } = center();
-  spawnPopup(popups, cx, cy - cellPx() * 2, `${ring.cells}칸은 아니야!`, CUTE.red);
+  // 몇 칸짜리 굴렁쇠였는지 알려주면 세지 않고도 정답을 외워버릴 수 있어, 숫자 없이 안내한다
+  spawnPopup(popups, cx, cy - cellPx() * 2, "이 굴렁쇠는 아니야!", CUTE.red);
   if (!isMuted()) sound.fizzle();
   setTimeout(() => { if (state === "playing") newCourse(); }, 700);
 }
@@ -314,12 +316,12 @@ document.getElementById("raisePanel").addEventListener("click", () => {
   if (state === "raise" && mode !== "motion") goReady();
 });
 
-// 모눈: "몇 칸"이라는 말이 눈에 보여야 반지름을 가늠할 수 있다
+// 모눈: 학생이 칸을 세어 반지름·지름을 스스로 알아내야 하므로 눈금선이 또렷하게 보여야 한다
 function drawGrid(ctx, cx, cy, cell) {
   const { w, h } = dims;
   ctx.save();
-  ctx.strokeStyle = "rgba(255,255,255,0.15)";
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(15,18,28,0.55)";
+  ctx.lineWidth = 1.4;
   for (let i = -14; i <= 14; i++) {
     const x = cx + i * cell, y = cy + i * cell;
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
@@ -447,23 +449,32 @@ function stepGame() {
       ctx.restore();
     }
 
-    // 굴렁쇠 크기 표찰
+    // 굴렁쇠 손잡이 자리 — 숫자를 감추고, 어디를 잡을지 표시하는 작은 점만 남긴다.
+    // 정답 칸수를 알려주지 않아야 학생이 모눈을 세어 스스로 판단한다.
     const lx = cx + Math.cos(-Math.PI / 4) * R;
     const ly = cy + Math.sin(-Math.PI / 4) * R;
-    drawSticker(ctx, lx, ly, fluidPx(dims, 19, { min: 13, max: 26 }), r.color, { lineWidth: 3, drop: 3 });
-    drawChunkyText(ctx, String(r.cells), lx, ly, fluidPx(dims, 19, { min: 13, max: 24 }), "#fff", { outlineWidth: 4 });
+    drawSticker(ctx, lx, ly, fluidPx(dims, 11, { min: 8, max: 15 }), r.color, { lineWidth: 2.5, drop: 2 });
   }
 
-  // 중심점 + 반지름 자
+  // 학생이 직접 세어야 하는 눈금자 — 숫자 없이 점만 찍는다.
+  // 반지름 모드는 중심에서 한쪽으로, 지름 모드는 중심 양쪽으로 대칭인 눈금을 보여준다.
+  const tickR = fluidPx(dims, 7, { min: 5, max: 10 });
+  const endR = fluidPx(dims, 11, { min: 8, max: 15 });
   ctx.save();
-  ctx.strokeStyle = "rgba(255,255,255,0.8)";
+  ctx.strokeStyle = "rgba(255,255,255,0.85)";
   ctx.setLineDash([8, 8]); ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + stage.answer * cell, cy); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx - (stage.askDiameter ? stage.answer * cell : 0), cy);
+  ctx.lineTo(cx + stage.answer * cell, cy);
+  ctx.stroke();
   ctx.setLineDash([]);
   ctx.restore();
   for (let i = 1; i <= stage.answer; i++) {
-    drawSparkle(ctx, cx + i * cell, cy, fluidPx(dims, 7, { min: 5, max: 10 }), "rgba(255,255,255,0.85)", 0.4);
+    drawSparkle(ctx, cx + i * cell, cy, tickR, "rgba(255,255,255,0.9)", 0.4);
+    if (stage.askDiameter) drawSparkle(ctx, cx - i * cell, cy, tickR, "rgba(255,255,255,0.9)", 0.4);
   }
+  drawSticker(ctx, cx + stage.answer * cell, cy, endR, "#ffffff", { lineWidth: 3, drop: 2 });
+  if (stage.askDiameter) drawSticker(ctx, cx - stage.answer * cell, cy, endR, "#ffffff", { lineWidth: 3, drop: 2 });
   drawSticker(ctx, cx, cy, fluidPx(dims, 13, { min: 9, max: 18 }), CUTE.red, { lineWidth: 3.5, drop: 3 });
 
   // 굴렁쇠를 굴리는 친구 — 지금 어느 위치를 돌고 있는지 보여준다

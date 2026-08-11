@@ -107,47 +107,48 @@ function fmtBig(v, kind) {  // 2300 -> "2 kg 300 g"
 function fmtSmall(v, kind) { return `${v} ${kind === "w" ? "g" : "mL"}`; }
 
 // 3학년 2학기 「들이와 무게」 진도
-//  1: 1kg=1000g / 1L=1000mL 같은 양 찾기   2: 복합 단위 ↔ 단일 단위 바꾸기   3: 들이·무게의 덧셈과 뺄셈
+//  1: 1kg=1000g / 1L=1000mL 같은 양 찾기   2: 복합 단위(2kg 100g 같은) ↔ 단일 단위 바꾸기
+//  3: 복합 단위끼리의 덧셈과 뺄셈 (두 값 모두 kg+g가 섞여 나올 수 있다)
 function genRound(level) {
   const kind = Math.random() < 0.5 ? "w" : "v";
   let answer, label, panLabel;
 
   if (level === 1) {
-    const b = randInt(1, 5);
+    const b = randInt(1, 6);
     answer = b * 1000;
     label = `${fmtBig(answer, kind)} 과 같은 양은?`;
     panLabel = fmtBig(answer, kind);
   } else if (level === 2) {
-    const b = randInt(1, 4), s = randInt(1, 9) * 100;
+    const b = randInt(1, 6), s = randInt(1, 9) * 100;
     answer = b * 1000 + s;
     label = `${fmtBig(answer, kind)} 과 같은 양은?`;
     panLabel = fmtBig(answer, kind);
   } else {
     const isAdd = Math.random() < 0.5;
-    if (isAdd) {
-      const a = randInt(1, 3) * 1000 + randInt(1, 8) * 100;
-      const b = randInt(2, 9) * 100;
-      answer = a + b;
-      label = `${fmtBig(a, kind)} + ${fmtSmall(b, kind)} 는?`;
-    } else {
-      const a = randInt(2, 5) * 1000 + randInt(1, 5) * 100;
-      const b = randInt(2, 9) * 100;
-      answer = a - b;
-      label = `${fmtBig(a, kind)} − ${fmtSmall(b, kind)} 는?`;
+    // 두 수 모두 kg와 g이 섞인 복합 단위로 나올 수 있게 한다(예: 2kg 300g + 1kg 800g).
+    // aS·bS가 0으로 뽑히면 fmtBig가 알아서 "N kg"만 있는 단순한 값으로 표시해 자연스러운 변주가 생긴다.
+    const aB = randInt(1, 6), aS = randInt(0, 9) * 100;
+    const bB = randInt(0, 5), bS = randInt(1, 9) * 100;
+    let a = aB * 1000 + aS, b = bB * 1000 + bS;
+    if (!isAdd) {
+      if (b >= a) { const t = a; a = b; b = t; }
+      if (a === b) a += 300; // 뺄셈 답이 0이 되지 않도록
     }
+    answer = isAdd ? a + b : a - b;
+    label = `${fmtBig(a, kind)} ${isAdd ? "+" : "−"} ${fmtBig(b, kind)} 는?`;
     panLabel = "식의 값";
   }
 
   // 정답은 "다른 표기"로 보여줘야 단위 변환을 실제로 하게 된다
   const answerLabel = level === 3 ? fmtBig(answer, kind) : fmtSmall(answer, kind);
   const wrongs = new Set();
-  const jitter = [100, -100, 200, -200, 1000, -1000, 900, -900];
+  const jitter = [100, -100, 200, -200, 300, -300, 1000, -1000, 900, -900, 1100, -1100];
   for (const j of shuffle(jitter)) {
     const v = answer + j;
     if (v > 0 && v !== answer) wrongs.add(v);
     if (wrongs.size >= 6) break;
   }
-  return { kind, answer, answerLabel, label, panLabel, wrongs: [...wrongs], useBigForItems: level === 3 };
+  return { kind, answer, answerLabel, label, panLabel, wrongs: [...wrongs] };
 }
 
 const handTracker = new HandTracker();
@@ -191,7 +192,8 @@ const CRATES = ["📦", "🧃", "🍯", "🪣", "🎒", "🥫"];
 // 상자가 하나씩 차례로 지나가면 기다렸다 고르기만 하면 되니 너무 쉬웠다.
 // 위·아래 두 줄이 서로 반대 방향으로 흐르게 해서, 여러 개를 한눈에 비교하고 골라야 하도록 바꿨다.
 function beltY(lane) { return dims.h * (lane === 0 ? 0.62 : 0.83); }
-function itemW() { return fluidPx(dims, 104, { min: 80, max: 148 }); }
+// "2 kg 300 g" 같은 복합 단위 글자가 잘리지 않도록 상자를 조금 더 넓게 잡았다
+function itemW() { return fluidPx(dims, 128, { min: 96, max: 172 }); }
 function itemH() { return fluidPx(dims, 58, { min: 46, max: 82 }); }
 
 function newRound() {
@@ -212,6 +214,9 @@ function newRound() {
       // 위 줄은 오른쪽 밖에서, 아래 줄은 왼쪽 밖에서 들어온다
       x: lane === 0 ? dims.w + iw + gap * slot : -iw - gap * slot,
       face: faces[(v + slot) % faces.length],
+      // 상자마다 표기 방식(복합 단위 / 단일 단위)을 따로 뽑는다 — 숫자만 보고 맞히지 못하게,
+      // 값을 실제로 변환해서 비교해야 한다
+      format: Math.random() < 0.5 ? "big" : "small",
       dead: false,
     };
   });
@@ -532,8 +537,10 @@ function stepGame() {
     ctx.font = `${ih * 0.42}px sans-serif`;
     ctx.fillText(it.face, it.x - iw * 0.33, y + by);
     ctx.restore();
-    const text = round.useBigForItems ? fmtBig(it.v, round.kind) : fmtSmall(it.v, round.kind);
-    drawChunkyText(ctx, text, it.x + iw * 0.1, y + by, fluidPx(dims, 19, { min: 13, max: 25 }), CUTE.ink, {
+    const text = it.format === "big" ? fmtBig(it.v, round.kind) : fmtSmall(it.v, round.kind);
+    // 복합 단위("2 kg 300 g")는 글자 수가 많아 조금 작게 표시한다
+    const textSize = it.format === "big" ? fluidPx(dims, 16, { min: 11, max: 21 }) : fluidPx(dims, 19, { min: 13, max: 25 });
+    drawChunkyText(ctx, text, it.x + iw * 0.12, y + by, textSize, CUTE.ink, {
       outline: "#fff", outlineWidth: 5,
     });
   });

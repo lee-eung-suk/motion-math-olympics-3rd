@@ -178,6 +178,9 @@ const startGate = new StartGate(mode, holdFill);
 
 let autoDiff, count, combo, maxCombo, playEndAt;
 let round, lanes, active, stepIdx, resolving, roundAt, wrongFlashUntil = 0;
+// 개구리가 발판 사이를 폴짝 뛰는 연출 + 빠르게 연달아 밟으면 붙는 스피드 스트릭 +
+// 줄마다 하나씩 숨어있는 별 발판 — 숫자만 콕콕 누르던 걸 "개구리 징검다리 건네주기" 놀이로 만든다
+let hop = null, lastStepAt = 0, speedStreak = 0, bonusScore = 0;
 let popups = [], bigPopups = [], confetti = [], sparks = [];
 const shake = new ScreenShake();
 let recorder, comboShot, fallbackShot, autoRec, recordedBlob = null;
@@ -206,6 +209,9 @@ function layoutStones() {
         y: baseY + Math.sin(s * 1.7 + i) * ((y1 - y0) / n) * 0.14,
       });
     }
+    // 처음·마지막 발판을 뺀 가운데 어딘가에 별 발판을 하나 숨긴다. 모든 줄에 똑같이 두므로
+    // 어느 줄이 정답인지 미리 알려주는 단서가 되지 않는다.
+    if (stones.length > 2) stones[randInt(1, stones.length - 2)].star = true;
     return { row, idx: i, stones, color: LANE_COLORS[i % LANE_COLORS.length], startX: w * 0.085, startY: baseY };
   });
 }
@@ -216,6 +222,7 @@ function newRound() {
   layoutStones();
   resolving = false;
   roundAt = performance.now();
+  hop = null; speedStreak = 0;
 }
 
 function startCountdown() {
@@ -245,6 +252,7 @@ function beginPlay() {
   autoDiff = new AutoDifficulty(levelFromUrl(AutoDifficulty.startLevelFromHighScore(prev)));
   count = 0; combo = 0; maxCombo = 0;
   popups = []; bigPopups = []; confetti = []; sparks = [];
+  bonusScore = 0; lastStepAt = 0; speedStreak = 0; hop = null;
   playEndAt = performance.now() + 60000;
   newRound();
 
@@ -279,6 +287,54 @@ function arrived() {
   setTimeout(() => { if (state === "playing") newRound(); }, 800);
 }
 
+// 발판을 밟을 때마다 호출: 빠르게 연달아 밟으면 스피드 스트릭이 붙고,
+// 별 발판을 처음 밟으면 보너스 반짝임과 점수를 준다
+function registerStep(st) {
+  const now = performance.now();
+  speedStreak = now - lastStepAt < 900 ? speedStreak + 1 : 1;
+  lastStepAt = now;
+  spawnSparkles(sparks, st.x, st.y, 10, ["#fff", CUTE.sun]);
+  if (!isMuted()) sound.pop();
+  if (speedStreak >= 3) {
+    spawnPopup(popups, st.x, st.y - stoneR() * 1.7, `🔥 ${speedStreak}연속!`, CUTE.orangeDark);
+    if (!isMuted() && speedStreak % 3 === 0) sound.comboUp();
+  }
+  if (st.star && !st.starTaken) {
+    st.starTaken = true;
+    bonusScore += 30;
+    spawnSparkles(sparks, st.x, st.y, 18, ["#fff", CUTE.sun, CUTE.pink]);
+    spawnBigPopup(bigPopups, st.x, st.y - stoneR() * 2.2, "⭐+30", CUTE.pink);
+    if (!isMuted()) sound.fever();
+  }
+}
+
+// 발판 아래 강물 — 은은한 잔물결로 "징검다리를 건넌다"는 배경을 만든다
+function drawRiver(ctx) {
+  const { w, h } = dims;
+  const band = topBand();
+  const y0 = band.y1 + fluidPx(dims, 6, { min: 4, max: 10 }), y1 = h;
+  ctx.save();
+  const grad = ctx.createLinearGradient(0, y0, 0, y1);
+  grad.addColorStop(0, "rgba(77,171,247,0.16)");
+  grad.addColorStop(1, "rgba(30,120,220,0.30)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, y0, w, y1 - y0);
+
+  ctx.strokeStyle = "rgba(255,255,255,0.4)";
+  ctx.lineWidth = 2;
+  const t = performance.now() / 850;
+  for (let row = 0; row < 6; row++) {
+    const ry = y0 + (y1 - y0) * ((row + 0.5) / 6);
+    ctx.beginPath();
+    for (let x = 0; x <= w; x += 16) {
+      const yy = ry + Math.sin(x * 0.045 + t + row * 1.3) * 4;
+      if (x === 0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function wrongLane(st) {
   if (resolving) return;
   resolving = true;
@@ -300,7 +356,7 @@ function endGame() {
     HighScore.set(UNIT, { count, bestLevel: autoDiff.level, label: `${medal} ${count}${RECORD_SUFFIX}`, at: Date.now() });
   }
   document.getElementById("resultMedal").textContent = medal;
-  document.getElementById("resultTitle").textContent = `${label}! 수고했어요`;
+  document.getElementById("resultTitle").textContent = `${label}! ⭐ 보너스 ${bonusScore}점 모았어요`;
   document.getElementById("statCount").textContent = count + "번";
   document.getElementById("statBest").textContent = best + "번";
   document.getElementById("statCombo").textContent = "🔥" + maxCombo;
@@ -363,7 +419,7 @@ function drawTopPanel(ctx, remain) {
   ctx.textAlign = "left";
   ctx.fillText(`● = 10${round.unit}   ○ = 1${round.unit}`, left + padX, y);
   ctx.textAlign = "right";
-  ctx.fillText(`🔥 ${combo}   🏅 ${count}번   ⏱ ${Math.ceil(remain / 1000)}초`, left + boxW - padX, y);
+  ctx.fillText(`🔥 ${combo}   🏅 ${count}번   ⭐ ${bonusScore}   ⏱ ${Math.ceil(remain / 1000)}초`, left + boxW - padX, y);
   ctx.restore();
   y += fluidPx(dims, 15, { min: 10, max: 20 });
 
@@ -451,6 +507,7 @@ function stepGame() {
 
   // 선을 따라 손을 계속 붙이고 가는 방식은 인식이 자주 끊겨 어려웠다.
   // 지금은 발판을 "순서대로 콕콕 짚기"라서, 손이 발판 위를 지나가기만 하면 밟힌다.
+  // 밟을 때마다 개구리가 이전 발판에서 다음 발판으로 폴짝 뛰어 건너간다.
   if (armed && !resolving) {
     outer:
     for (const c of cursors) {
@@ -461,8 +518,8 @@ function stepGame() {
           if (Math.hypot(c.x - st.x, c.y - st.y) < R * 1.2) {
             if (ln.idx === round.answerIdx) {
               active = ln.idx; stepIdx = 1;
-              spawnSparkles(sparks, st.x, st.y, 8, ["#fff", ln.color]);
-              if (!isMuted()) sound.click();
+              hop = { color: ln.color, from: { x: ln.startX, y: ln.startY }, to: { x: st.x, y: st.y }, start: performance.now(), dur: 260 };
+              registerStep(st);
             } else {
               wrongLane(st);
             }
@@ -474,9 +531,10 @@ function stepGame() {
         const ln = lanes[active];
         const st = ln.stones[stepIdx];
         if (st && Math.hypot(c.x - st.x, c.y - st.y) < R * 1.2) {
+          const prev = ln.stones[stepIdx - 1];
+          hop = { color: ln.color, from: { x: prev.x, y: prev.y }, to: { x: st.x, y: st.y }, start: performance.now(), dur: 260 };
           stepIdx++;
-          spawnSparkles(sparks, st.x, st.y, 8, ["#fff", ln.color]);
-          if (!isMuted()) sound.pop();
+          registerStep(st);
           if (stepIdx >= ln.stones.length) { arrived(); return; }
           break outer;
         }
@@ -484,6 +542,7 @@ function stepGame() {
     }
   }
 
+  drawRiver(ctx);
   drawTopPanel(ctx, remain);
 
   for (const ln of lanes) {
@@ -514,6 +573,15 @@ function stepGame() {
       if (done) drawSparkle(ctx, st.x, st.y + by, rr * 0.6, "#fff", 0.4);
       else drawChunkyText(ctx, String(i + 1), st.x, st.y + by, rr * 0.72, "#fff", { outlineWidth: Math.max(3, rr * 0.16) });
 
+      // 아직 안 밟은 별 발판은 위에서 반짝반짝 힌트를 준다 — 모든 줄에 고르게 있어 정답을 알려주지 않는다
+      if (st.star && !st.starTaken) {
+        ctx.save();
+        ctx.font = `${rr * 0.85}px sans-serif`;
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("⭐", st.x, st.y + by - rr * 1.35 + Math.sin(performance.now() / 260 + i) * 3);
+        ctx.restore();
+      }
+
       // 다음에 밟을 발판은 링을 둘러 한눈에 보이게
       if (isNext) {
         ctx.save();
@@ -530,6 +598,33 @@ function stepGame() {
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.font = `${R * 0.9}px sans-serif`;
     ctx.fillText("🏁", Math.min(w - R * 0.6, last.x + R * 1.6), last.y);
+    ctx.restore();
+  }
+
+  // 개구리 마스코트 — 발판을 밟을 때마다 포물선을 그리며 폴짝 뛰어 건너간다
+  const R2 = stoneR();
+  if (hop) {
+    const t = Math.min(1, (performance.now() - hop.start) / hop.dur);
+    const ease = 1 - (1 - t) * (1 - t);
+    const x = hop.from.x + (hop.to.x - hop.from.x) * ease;
+    const arc = Math.sin(Math.PI * t) * R2 * 1.5;
+    const y = hop.from.y + (hop.to.y - hop.from.y) * ease - arc;
+    const squash = t > 0.85 ? 1 - (t - 0.85) * 1.6 : 1;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(1, squash);
+    ctx.font = `${R2 * 1.3}px sans-serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("🐸", 0, 0);
+    ctx.restore();
+    if (t >= 1) hop = null;
+  } else if (active !== -1 && stepIdx > 0) {
+    const ln = lanes[active];
+    const st = ln.stones[stepIdx - 1];
+    ctx.save();
+    ctx.font = `${R2 * 1.1}px sans-serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("🐸", st.x, st.y - R2 * 0.15 + bob(1.8, R2 * 0.06, stepIdx));
     ctx.restore();
   }
 
