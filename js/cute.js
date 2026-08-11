@@ -218,6 +218,9 @@ export function drawBunting(ctx, dims) {
 // ---------- 커서 ----------
 
 // 마리오파티의 하얀 장갑 손 커서. 잡는 중(active)이면 노랗게 달아오른다.
+// 원점 (0,0) = 검지 손끝. 게임의 판정(히트테스트)이 항상 이 (x,y)를 기준으로 이루어지므로,
+// 손끝이 원점과 맞아떨어져야 "화면에 보이는 손끝 위치 = 실제로 인식되는 지점"이 된다.
+// (예전에는 손바닥 중앙이 원점이라, 마우스 좌표와 눈에 보이는 손끝이 어긋나 보였다.)
 export function drawGloveCursor(ctx, x, y, size, opts = {}) {
   const s = size / 26;
   const active = opts.active;
@@ -226,33 +229,33 @@ export function drawGloveCursor(ctx, x, y, size, opts = {}) {
   ctx.scale(s, s);
   ctx.translate(0, bob(1.6, 1.6));
 
-  ctx.beginPath(); ctx.ellipse(0, 24, 15, 5, 0, 0, Math.PI * 2);
+  ctx.beginPath(); ctx.ellipse(1, 49, 15, 5, 0, 0, Math.PI * 2);
   ctx.fillStyle = "rgba(34,48,92,0.22)"; ctx.fill();
 
   ctx.lineJoin = "round";
   ctx.lineWidth = 4; ctx.strokeStyle = CUTE.ink;
   ctx.fillStyle = active ? CUTE.sun : "#ffffff";
 
-  // 손바닥
+  // 손바닥 (검지 손끝이 원점(0,0) 근처에 오도록 그린다)
   ctx.beginPath();
-  ctx.moveTo(-13, 2);
-  ctx.quadraticCurveTo(-15, 18, -2, 20);
-  ctx.quadraticCurveTo(13, 21, 14, 6);
-  ctx.lineTo(14, -6);
-  ctx.quadraticCurveTo(14, -12, 9, -11);
-  ctx.lineTo(9, -8);
-  ctx.lineTo(4, -22);
-  ctx.quadraticCurveTo(1, -27, -3, -24);
-  ctx.quadraticCurveTo(-6, -22, -4, -17);
-  ctx.lineTo(-1, -6);
-  ctx.quadraticCurveTo(-4, -10, -9, -8);
-  ctx.quadraticCurveTo(-14, -6, -13, 2);
+  ctx.moveTo(-12, 27);
+  ctx.quadraticCurveTo(-14, 43, -1, 45);
+  ctx.quadraticCurveTo(14, 46, 15, 31);
+  ctx.lineTo(15, 19);
+  ctx.quadraticCurveTo(15, 13, 10, 14);
+  ctx.lineTo(10, 17);
+  ctx.lineTo(5, 3);
+  ctx.quadraticCurveTo(2, -2, -2, 1);
+  ctx.quadraticCurveTo(-5, 3, -3, 8);
+  ctx.lineTo(0, 19);
+  ctx.quadraticCurveTo(-3, 15, -8, 17);
+  ctx.quadraticCurveTo(-13, 19, -12, 27);
   ctx.closePath();
   ctx.fill(); ctx.stroke();
 
   // 소매 단추 두 개
-  ctx.beginPath(); ctx.arc(-4, 15, 1.9, 0, Math.PI * 2);
-  ctx.arc(3, 16, 1.9, 0, Math.PI * 2);
+  ctx.beginPath(); ctx.arc(-3, 40, 1.9, 0, Math.PI * 2);
+  ctx.arc(4, 41, 1.9, 0, Math.PI * 2);
   ctx.fillStyle = "rgba(34,48,92,0.5)"; ctx.fill();
   ctx.restore();
 }
