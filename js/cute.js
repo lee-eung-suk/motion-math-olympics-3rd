@@ -263,6 +263,18 @@ export function drawGloveCursor(ctx, x, y, size, opts = {}) {
 // ---------- HUD ----------
 
 // 상단 문제 배너: 크림색 캔디 패널 + 굵은 테두리 + 양쪽 별 장식
+// drawCuteBanner가 실제로 차지할 세로 높이(캔버스 맨 위 기준)를 미리 계산한다 —
+// 배너 바로 아래에 다른 요소를 겹치지 않게 배치해야 할 때 쓴다. lines는 각 줄의
+// size만 있으면 되고(텍스트 내용은 너비 계산에만 쓰이므로 여기선 필요 없다).
+export function bannerHeight(dims, lines, fluidPx, opts = {}) {
+  const padY = fluidPx(dims, 13, { min: 9, max: 19 });
+  const gap = fluidPx(dims, 6, { min: 4, max: 10 });
+  const top = opts.top ?? fluidPx(dims, 10, { min: 6, max: 18 });
+  const sizes = lines.map((l) => fluidPx(dims, l.size ?? 22));
+  const boxH = sizes.reduce((s, sz) => s + sz, 0) + gap * (sizes.length - 1) + padY * 2;
+  return top + boxH;
+}
+
 export function drawCuteBanner(ctx, dims, lines, fluidPx, opts = {}) {
   const { w } = dims;
   const padX = fluidPx(dims, 26, { min: 16, max: 38 });

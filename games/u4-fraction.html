@@ -70,8 +70,8 @@ import {
 import {
   CUTE, bob, pop, drawSticker, drawStickerRect, drawChunkyText, drawSparkle,
   spawnSparkles, updateSparkles, drawSparkles, makeDrifters, drawDrifters,
-  drawBunting, drawGloveCursor, drawCuteBanner, drawPips, drawLevelStars,
-} from "../js/cute.js?v=3";
+  drawBunting, drawGloveCursor, drawCuteBanner, bannerHeight, drawPips, drawLevelStars,
+} from "../js/cute.js?v=4";
 requestWakeLock();
 
 const UNIT = "m4";
@@ -252,15 +252,26 @@ let recorder, comboShot, fallbackShot, autoRec, recordedBlob = null;
 const recIndicator = document.getElementById("recIndicator");
 let cursors = [];
 
-// 기준판이 있는 라운드에서는 왼쪽을 비워 둬서 조각이 그 위를 덮지 않게 한다
+// 상단 문제 배너(drawCuteBanner)와 같은 크기 구성 — 기준판을 그 바로 아래 가운데에
+// 붙이려면 배너가 실제로 차지하는 높이를 알아야 한다
+const BANNER_SIZES = [{ size: 32 }, { size: 18 }, { size: 14 }];
+
+// 예전엔 기준판이 화면 왼쪽 구석에 따로 떠 있어서, 모션(카메라) 모드에서는 사람 몸에
+// 가려지거나 시선이 세 군데(문제/기준판/조각)로 흩어지기 쉬웠다. 지금은 "문제 텍스트 +
+// 기준 그림"이 화면 맨 위 가운데 한 덩어리로 모이도록, 상단 배너 바로 아래에 붙인다.
 function hasRefPanel() { return round && (round.kind === "match" || round.kind === "compare"); }
 function refPanel() {
-  const { w, h } = dims;
-  return { x: w * 0.12, y: h * 0.44, r: fluidPx(dims, 52, { min: 36, max: 72 }) };
+  const { w } = dims;
+  const r = fluidPx(dims, 46, { min: 34, max: 64 });
+  const top = bannerHeight(dims, BANNER_SIZES, fluidPx);
+  return { x: w / 2, y: top + r * 1.2, r };
 }
 function playArea() {
   const { w, h } = dims;
-  return { x0: hasRefPanel() ? w * 0.27 : w * 0.10, x1: w * 0.90, y0: h * 0.32, y1: h * 0.86 };
+  const top = hasRefPanel()
+    ? refPanel().y + refPanel().r * 1.8
+    : bannerHeight(dims, BANNER_SIZES, fluidPx) + h * 0.02;
+  return { x0: w * 0.08, x1: w * 0.92, y0: top, y1: h * 0.90 };
 }
 function sliceR() { return fluidPx(dims, 50, { min: 38, max: 72 }); }
 

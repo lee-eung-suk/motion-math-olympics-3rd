@@ -71,7 +71,7 @@ import {
   CUTE, LANE_COLORS, bob, drawSticker, drawStickerRect, drawChunkyText,
   drawSparkle, spawnSparkles, updateSparkles, drawSparkles, makeDrifters, drawDrifters,
   drawBunting, drawGloveCursor, drawLevelStars,
-} from "../js/cute.js?v=3";
+} from "../js/cute.js?v=4";
 requestWakeLock();
 
 const UNIT = "m6";
@@ -509,34 +509,41 @@ function stepGame() {
   // 지금은 발판을 "순서대로 콕콕 짚기"라서, 손이 발판 위를 지나가기만 하면 밟힌다.
   // 밟을 때마다 개구리가 이전 발판에서 다음 발판으로 폴짝 뛰어 건너간다.
   if (armed && !resolving) {
-    outer:
-    for (const c of cursors) {
-      if (active === -1) {
-        // 아직 줄을 안 골랐으면 각 줄의 첫 발판만 받는다
+    if (active === -1) {
+      // 아직 줄을 안 골랐으면, 판정 범위 안에 든 모든 줄의 첫 발판 중 커서와 "가장 가까운 것"
+      // 하나만 고른다. 예전엔 배열 순서상 앞선 줄을 무조건 골라서, 학생이 정답 줄의 발판에
+      // 더 가깝게 짚었어도 판정 범위가 겹치면 앞 순서 줄이 먼저 걸려 오답 처리되는 문제가 있었다.
+      let best = null, bestD = Infinity;
+      for (const c of cursors) {
         for (const ln of lanes) {
           const st = ln.stones[0];
-          if (Math.hypot(c.x - st.x, c.y - st.y) < R * 1.2) {
-            if (ln.idx === round.answerIdx) {
-              active = ln.idx; stepIdx = 1;
-              hop = { color: ln.color, from: { x: ln.startX, y: ln.startY }, to: { x: st.x, y: st.y }, start: performance.now(), dur: 260 };
-              registerStep(st);
-            } else {
-              wrongLane(st);
-            }
-            break outer;
-          }
+          const d = Math.hypot(c.x - st.x, c.y - st.y);
+          if (d < R * 1.2 && d < bestD) { bestD = d; best = { ln, st }; }
         }
-      } else {
-        // 고른 줄의 "다음 발판"만 인식한다 — 엉뚱한 곳을 스쳐도 실패하지 않는다
-        const ln = lanes[active];
-        const st = ln.stones[stepIdx];
-        if (st && Math.hypot(c.x - st.x, c.y - st.y) < R * 1.2) {
-          const prev = ln.stones[stepIdx - 1];
-          hop = { color: ln.color, from: { x: prev.x, y: prev.y }, to: { x: st.x, y: st.y }, start: performance.now(), dur: 260 };
-          stepIdx++;
-          registerStep(st);
-          if (stepIdx >= ln.stones.length) { arrived(); return; }
-          break outer;
+      }
+      if (best) {
+        if (best.ln.idx === round.answerIdx) {
+          active = best.ln.idx; stepIdx = 1;
+          hop = { color: best.ln.color, from: { x: best.ln.startX, y: best.ln.startY }, to: { x: best.st.x, y: best.st.y }, start: performance.now(), dur: 260 };
+          registerStep(best.st);
+        } else {
+          wrongLane(best.st);
+        }
+      }
+    } else {
+      // 고른 줄의 "다음 발판"만 인식한다 — 엉뚱한 곳을 스쳐도 실패하지 않는다
+      const ln = lanes[active];
+      const st = ln.stones[stepIdx];
+      if (st) {
+        for (const c of cursors) {
+          if (Math.hypot(c.x - st.x, c.y - st.y) < R * 1.2) {
+            const prev = ln.stones[stepIdx - 1];
+            hop = { color: ln.color, from: { x: prev.x, y: prev.y }, to: { x: st.x, y: st.y }, start: performance.now(), dur: 260 };
+            stepIdx++;
+            registerStep(st);
+            if (stepIdx >= ln.stones.length) { arrived(); return; }
+            break;
+          }
         }
       }
     }

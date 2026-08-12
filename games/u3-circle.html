@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>원 그리기 · 종목 3</title>
+<title>원 찾기 · 종목 3</title>
 <link rel="stylesheet" href="../css/style.css?v=2">
 </head>
 <body>
@@ -18,7 +18,7 @@
   </div>
 
   <div class="overlay-panel" id="loadingPanel">
-    <h2>🎨 원 그리기</h2>
+    <h2>🎯 원 찾기</h2>
     <p id="loadingText">준비 중…</p>
   </div>
 
@@ -70,8 +70,8 @@ import {
 import {
   CUTE, bob, drawSticker, drawChunkyText, drawSparkle,
   spawnSparkles, updateSparkles, drawSparkles, makeDrifters, drawDrifters,
-  drawBunting, drawGloveCursor, drawCuteBanner, drawLevelStars,
-} from "../js/cute.js?v=3";
+  drawBunting, drawGloveCursor, drawCuteBanner, bannerHeight, drawLevelStars,
+} from "../js/cute.js?v=4";
 requestWakeLock();
 
 const UNIT = "m3";
@@ -80,6 +80,8 @@ const RECORD_SUFFIX = "개 완성";
 const MEDALS = { bronze: 3, silver: 6, gold: 9 };
 const mode = InputMode.get();
 const TWO_PI = Math.PI * 2;
+const HOLD_MS = 750;
+const BANNER_SIZES = [{ size: 32 }, { size: 18 }, { size: 14 }];
 
 const video = document.getElementById("video");
 const canvas = document.getElementById("gameCanvas");
@@ -95,19 +97,27 @@ document.getElementById("homeBtn").addEventListener("click", () => { bgm.stop();
 document.getElementById("homeBtn2").addEventListener("click", () => { bgm.stop(); location.href = "../index.html"; });
 
 function randInt(min, max) { return min + Math.floor(Math.random() * (max - min + 1)); }
+function shuffle(arr) { for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; }
 
 // 3학년 2학기 「원」 진도: 원의 중심·반지름·지름, 지름 = 반지름 × 2.
-// 문제는 "반지름이 N인 원 그리기!" / "지름이 N인 원 그리기!" 형태로 숫자를 그대로 알려주고,
-// 학생은 그 숫자만큼(지름이면 절반을) 중심에서 떨어진 자리를 손으로 한 바퀴 그린다.
-//  1: 반지름만, 작은 수, 넉넉한 허용 범위   2: 지름 절반 섞임, 수 커짐   3: 지름 위주, 허용 범위 좁음
+// 모눈 한 칸 = 1cm로 두고, 화면에 흩어진 원 여러 개 중 문제가 요구하는 크기의 원을
+// 찾아 손으로 꾹 눌러 고르는 방식. 헷갈리게 하려고 오답 원도 정답과 반지름이 가까운
+// 값으로 섞는다.
+//  1: 원 2개, 반지름만, 값 차이 넉넉   2: 원 3개, 지름 절반 섞임   3: 원 4개, 지름 위주, 값 차이 좁음
 function genQuestion(level) {
+  const n = level === 1 ? 2 : level === 2 ? 3 : 4;
   const askDiameter = level === 1 ? false : level === 2 ? Math.random() < 0.5 : Math.random() < 0.65;
-  const radius = level === 1 ? randInt(2, 4) : level === 2 ? randInt(2, 5) : randInt(3, 6);
-  const shown = askDiameter ? radius * 2 : radius;
+  const minR = 2, maxR = level === 1 ? 5 : level === 2 ? 6 : 7;
+  const correctRadius = level === 1 ? randInt(2, 4) : level === 2 ? randInt(2, 5) : randInt(3, 6);
+  const pool = new Set([correctRadius]);
+  let guard = 0;
+  while (pool.size < n && guard++ < 100) pool.add(randInt(minR, maxR));
+  const radii = shuffle([...pool]);
+  const shown = askDiameter ? correctRadius * 2 : correctRadius;
   return {
-    radius, askDiameter, shown,
-    label: askDiameter ? `지름이 ${shown}인 원 그리기!` : `반지름이 ${shown}인 원 그리기!`,
-    hint: askDiameter ? "지름은 반지름의 2배 — 그러니까 반지름은 그 절반이에요" : "가운데 점에서 손까지의 거리가 반지름이에요",
+    correctRadius, askDiameter, shown, radii,
+    label: askDiameter ? `지름이 ${shown}cm인 원은?` : `반지름이 ${shown}cm인 원은?`,
+    hint: askDiameter ? "지름은 반지름의 2배 — 모눈 칸을 세어봐요" : "가운데 점에서 원 테두리까지 모눈 칸을 세어봐요",
   };
 }
 
@@ -142,21 +152,48 @@ const holdFill = document.getElementById("holdFill");
 const startGate = new StartGate(mode, holdFill);
 
 let autoDiff, count, combo, maxCombo, playEndAt;
-let question, acc, lastAng, pacerAngle, resolving, roundAt, wrongFlashUntil = 0;
+let question, circles, holdIdx, holdSince, resolving, roundAt, wrongFlashUntil = 0;
 let popups = [], bigPopups = [], confetti = [], sparks = [];
 const shake = new ScreenShake();
 let recorder, comboShot, fallbackShot, autoRec, recordedBlob = null;
 const recIndicator = document.getElementById("recIndicator");
 let cursors = [];
 
-function center() { return { cx: dims.w * 0.5, cy: dims.h * 0.60 }; }
-function cellPx() { return Math.min(dims.w, dims.h) * 0.062; }
-// 레벨이 오를수록 원 궤도에서 벗어나도 봐주는 폭이 좁아져 더 정확하게 그려야 한다
-function tolerance() { return cellPx() * (autoDiff.level === 1 ? 0.46 : autoDiff.level === 2 ? 0.38 : 0.30); }
+let gridCell = 40;
 
+// 원이 서로 겹치면 학생이 모눈 칸을 세어 크기를 가늠하기 어려워진다. 무작위 위치에
+// 재시도로 겹침을 피하는 방식은 원이 크고 개수가 많을 때(레벨3, 4개) 자리가 부족해
+// 실패하면서 원끼리 겹쳐버리는 문제가 있었다. 그래서 화면을 원 개수만큼 칸으로 나눠
+// 원마다 자기 칸 안에서만(살짝 흔들리며) 자리 잡도록 해 겹침 자체를 원천적으로 막는다.
 function newQuestion() {
   question = genQuestion(autoDiff.level);
-  acc = 0; lastAng = null; pacerAngle = -Math.PI / 2;
+  const top = bannerHeight(dims, BANNER_SIZES, fluidPx) + dims.h * 0.03;
+  const bottom = dims.h * 0.94;
+  const marginX = dims.w * 0.08;
+  const playW = dims.w - marginX * 2, playH = bottom - top;
+
+  const n = question.radii.length;
+  const cols = n <= 2 ? n : n === 3 ? 3 : 2;
+  const rows = Math.ceil(n / cols);
+  const slotW = playW / cols, slotH = playH / rows;
+
+  // 이번 문제의 원 중 가장 큰 반지름이 자기 칸을 꽉 채우도록 cm→px 비율을 정한다
+  const maxRadius = Math.max(...question.radii);
+  const cell = (Math.min(slotW, slotH) / 2) * 0.82 / maxRadius;
+  gridCell = cell;
+
+  circles = question.radii.map((r, i) => {
+    const col = i % cols, row = Math.floor(i / cols);
+    const slotCx = marginX + slotW * (col + 0.5);
+    const slotCy = top + slotH * (row + 0.5);
+    const px = r * cell;
+    const jx = Math.max(0, slotW / 2 * 0.88 - px);
+    const jy = Math.max(0, slotH / 2 * 0.88 - px);
+    const cx = slotCx + (Math.random() * 2 - 1) * jx;
+    const cy = slotCy + (Math.random() * 2 - 1) * jy;
+    return { radius: r, px, cx, cy, isCorrect: r === question.correctRadius };
+  });
+  holdIdx = -1; holdSince = 0;
   resolving = false;
   roundAt = performance.now();
 }
@@ -206,20 +243,33 @@ function beginPlay() {
   });
 }
 
-function circleComplete() {
+function circleComplete(i) {
   if (resolving) return;
   resolving = true;
-  const { cx, cy } = center();
+  const ci = circles[i];
   count++; combo++;
   if (combo > maxCombo) { maxCombo = combo; comboShot.capture(canvas); }
   autoDiff.reportCorrect();
   autoRec.trigger();
   shake.trigger(8, 170);
-  spawnConfetti(confetti, cx, cy, 40);
-  spawnSparkles(sparks, cx, cy, 22, ["#fff", CUTE.sun, CUTE.pink]);
-  spawnBigPopup(bigPopups, cx, dims.h * 0.42, `${count}개 완성!`, CUTE.sun);
+  spawnConfetti(confetti, ci.cx, ci.cy, 40);
+  spawnSparkles(sparks, ci.cx, ci.cy, 22, ["#fff", CUTE.sun, CUTE.pink]);
+  spawnBigPopup(bigPopups, ci.cx, ci.cy - ci.px - 30, `${count}개 정답!`, CUTE.sun);
   if (!isMuted()) { sound.success(); if (combo >= 3 && combo % 3 === 0) sound.fever(); }
   setTimeout(() => { if (state === "playing") newQuestion(); }, 780);
+}
+
+function wrongPick(i) {
+  if (resolving) return;
+  resolving = true;
+  combo = 0;
+  autoDiff.reportWrong();
+  shake.trigger(4, 150);
+  wrongFlashUntil = performance.now() + 450;
+  const ci = circles[i];
+  spawnPopup(popups, ci.cx, ci.cy - ci.px - 20, "땡! 다시 봐요", CUTE.red);
+  if (!isMuted()) sound.fizzle();
+  setTimeout(() => { if (state === "playing") newQuestion(); }, 640);
 }
 
 function endGame() {
@@ -246,10 +296,10 @@ function endGame() {
   }
   document.getElementById("savePhotoBtn").onclick = async () => {
     const blob = await shot.toBlob((c, w, h) => drawPhotoOverlay(c, w, h, { title: TITLE, record: count + RECORD_SUFFIX, medal }));
-    downloadBlob(blob, `수학체육올림픽_원그리기_${formatFileTimestamp()}.png`);
+    downloadBlob(blob, `수학체육올림픽_원찾기_${formatFileTimestamp()}.png`);
   };
   document.getElementById("saveVideoBtn").onclick = () => {
-    if (recordedBlob) downloadBlob(recordedBlob, `수학체육올림픽_원그리기_${formatFileTimestamp()}.${recorder.extension}`);
+    if (recordedBlob) downloadBlob(recordedBlob, `수학체육올림픽_원찾기_${formatFileTimestamp()}.${recorder.extension}`);
   };
   document.getElementById("resultPanel").style.display = "flex";
   if (!isMuted()) sound.success();
@@ -266,16 +316,18 @@ document.getElementById("raisePanel").addEventListener("click", () => {
   if (state === "raise" && mode !== "motion") goReady();
 });
 
-// 모눈: 학생이 칸을 세어 눈으로도 크기를 가늠할 수 있도록 또렷하게 그린다
-function drawGrid(ctx, cx, cy, cell) {
+// 모눈: 학생이 칸을 세어 눈으로도 크기를 가늠할 수 있도록 또렷하게 그린다 (캔버스 중앙 기준)
+function drawGrid(ctx) {
   const { w, h } = dims;
+  const cell = gridCell;
+  const ox = w / 2, oy = h / 2;
   ctx.save();
   ctx.strokeStyle = "rgba(15,18,28,0.5)";
   ctx.lineWidth = 1.3;
-  for (let i = -14; i <= 14; i++) {
-    const x = cx + i * cell, y = cy + i * cell;
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+  for (let i = -30; i <= 30; i++) {
+    const x = ox + i * cell, y = oy + i * cell;
+    if (x >= 0 && x <= w) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+    if (y >= 0 && y <= h) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
   }
   ctx.restore();
 }
@@ -325,71 +377,56 @@ function stepGame() {
   const remain = Math.max(0, playEndAt - performance.now());
   if (remain <= 0) { endGame(); return; }
 
-  const { cx, cy } = center();
-  const cell = cellPx();
-  const R = question.radius * cell;
-  const tol = tolerance();
   const armed = performance.now() - roundAt > 550;
 
-  drawGrid(ctx, cx, cy, cell);
+  drawGrid(ctx);
 
-  // 목표 궤도 위를 앞서 도는 토끼 — 방향과 속도를 눈으로 보여준다(따라 그릴 필요는 없다)
-  pacerAngle += dt * (1.0 + autoDiff.level * 0.3);
-
-  // 손이 목표 반지름 근처(허용 범위 안)에 있으면 지나간 각도를 부호까지 누적한다.
-  // 왔다갔다 하면 서로 상쇄되므로, 한 방향으로 꾸준히 원을 그려야 한 바퀴가 채워진다.
-  let onTrack = false;
+  // 판정 범위 안(원 안쪽)에 든 것 중 손/커서와 가장 가까운 원 하나만 본다 — 원끼리
+  // 판정이 겹치는 경계에서 손이 어느 쪽에 더 가까운지로 판단하기 위함
   if (!resolving && armed) {
+    let hit = -1, bestD = Infinity;
     for (const c of cursors) {
-      const d = Math.hypot(c.x - cx, c.y - cy);
-      if (Math.abs(d - R) > tol) continue;
-      onTrack = true; c.onTrack = true;
-      const ang = Math.atan2(c.y - cy, c.x - cx);
-      if (lastAng === null) lastAng = ang;
-      else {
-        let delta = ang - lastAng;
-        while (delta > Math.PI) delta -= TWO_PI;
-        while (delta < -Math.PI) delta += TWO_PI;
-        if (Math.abs(delta) < 1.0) acc += delta; // 순간이동 같은 큰 점프는 무시
-        lastAng = ang;
+      for (let i = 0; i < circles.length; i++) {
+        const ci = circles[i];
+        const d = Math.hypot(c.x - ci.cx, c.y - ci.cy);
+        if (d <= ci.px && d < bestD) { bestD = d; hit = i; c.onTrack = true; }
       }
-      break;
     }
-    if (!onTrack) lastAng = null; // 궤도를 벗어나면 다시 붙었을 때 이어그리기 시작점만 새로 잡는다
-    if (Math.abs(acc) >= TWO_PI - 0.05) circleComplete();
+    if (hit === -1) {
+      holdIdx = -1;
+    } else if (circles[hit].isCorrect) {
+      if (holdIdx !== hit) { holdIdx = hit; holdSince = performance.now(); }
+      if (performance.now() - holdSince >= HOLD_MS) circleComplete(hit);
+    } else {
+      wrongPick(hit);
+    }
   }
 
-  // 목표 궤도(옅은 안내선)
-  ctx.save();
-  ctx.beginPath(); ctx.arc(cx, cy, R, 0, TWO_PI);
-  ctx.strokeStyle = onTrack ? "rgba(61,220,132,0.55)" : "rgba(255,255,255,0.42)";
-  ctx.lineWidth = tol * 2;
-  ctx.stroke();
-  ctx.restore();
-
-  // 그려진(채워진) 만큼 색이 찬다
-  if (Math.abs(acc) > 0.02 && lastAng !== null) {
-    const from = lastAng - acc, to = lastAng;
+  // 원들: 고르고 있는 원은 누른 만큼 궤도가 채워지고, 나머지는 옅은 점선 안내선
+  circles.forEach((ci, i) => {
+    const held = i === holdIdx ? Math.min(1, (performance.now() - holdSince) / HOLD_MS) : 0;
     ctx.save();
-    ctx.beginPath();
-    ctx.arc(cx, cy, R, Math.min(from, to), Math.max(from, to));
-    ctx.strokeStyle = CUTE.sun;
-    ctx.lineWidth = Math.max(7, tol * 1.1);
-    ctx.lineCap = "round";
+    ctx.beginPath(); ctx.arc(ci.cx, ci.cy, ci.px, 0, TWO_PI);
+    ctx.setLineDash(i === holdIdx ? [] : [10, 8]);
+    ctx.strokeStyle = i === holdIdx ? "rgba(61,220,132,0.6)" : "rgba(255,255,255,0.55)";
+    ctx.lineWidth = Math.max(4, ci.px * 0.05);
     ctx.stroke();
+    ctx.setLineDash([]);
     ctx.restore();
-  }
 
-  // 중심점
-  drawSticker(ctx, cx, cy, fluidPx(dims, 13, { min: 9, max: 18 }), CUTE.red, { lineWidth: 3.5, drop: 3 });
+    drawSticker(ctx, ci.cx, ci.cy, fluidPx(dims, 8, { min: 6, max: 11 }), CUTE.red, { lineWidth: 2.5, drop: 2 });
 
-  // 페이서 토끼
-  const hx = cx + Math.cos(pacerAngle) * R, hy = cy + Math.sin(pacerAngle) * R;
-  ctx.save();
-  ctx.font = `${Math.max(22, cell * 0.85)}px sans-serif`;
-  ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText("🐰", hx, hy + bob(2, 3));
-  ctx.restore();
+    if (held > 0) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(ci.cx, ci.cy, ci.px, -Math.PI / 2, -Math.PI / 2 + held * TWO_PI);
+      ctx.strokeStyle = CUTE.sun;
+      ctx.lineWidth = Math.max(7, ci.px * 0.12);
+      ctx.lineCap = "round";
+      ctx.stroke();
+      ctx.restore();
+    }
+  });
 
   if (performance.now() < wrongFlashUntil) {
     ctx.save();
@@ -398,7 +435,7 @@ function stepGame() {
     ctx.restore();
   }
 
-  const progress = Math.min(1, Math.abs(acc) / TWO_PI);
+  const progress = holdIdx !== -1 ? Math.min(1, (performance.now() - holdSince) / HOLD_MS) : 0;
 
   confetti = updateConfetti(confetti, dt);
   drawConfetti(ctx, confetti);
@@ -412,8 +449,8 @@ function stepGame() {
   drawVignette(ctx, w, h, 0.2);
   drawCuteBanner(ctx, dims, [
     { text: question.label, size: 32, chunky: true, color: CUTE.sun },
-    { text: `🌀 ${Math.round(progress * 100)}%   🔥 ${combo}   🏅 ${count}개   ⏱ ${Math.ceil(remain / 1000)}초`, size: 18, color: CUTE.orangeDark },
-    { text: `${question.hint} · ${mode === "motion" ? "토끼를 따라 손으로 원을 그려요!" : "궤도를 따라 드래그해서 원을 그려요!"}`, size: 14, weight: "700", color: "#5c6b8a" },
+    { text: `🎯 ${Math.round(progress * 100)}%   🔥 ${combo}   🏅 ${count}개   ⏱ ${Math.ceil(remain / 1000)}초`, size: 18, color: CUTE.orangeDark },
+    { text: `${question.hint} · ${mode === "motion" ? "정답 원을 손으로 꾹 눌러요!" : "정답 원을 꾹 눌러요!"}`, size: 14, weight: "700", color: "#5c6b8a" },
   ], fluidPx);
 
   drawLevelStars(ctx, dims, autoDiff.level, fluidPx);
