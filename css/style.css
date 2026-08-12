@@ -262,7 +262,15 @@ body.landing .help-modal{background:#fffdf7ee;border-color:#ffd166;}
   color:var(--text);font-weight:700;padding:clamp(10px, 1.8vh, 14px) clamp(16px, 3vw, 28px);
   min-height:var(--tap);
 }
-.countdown-num{font-size:clamp(4rem, 16vmin, 8rem);font-weight:900;color:var(--accent);text-shadow:0 8px 20px #000;}
+.countdown-num{
+  font-size:clamp(4rem, 16vmin, 8rem);font-weight:900;color:var(--accent);
+  -webkit-text-stroke:3px #1d2b4d;
+  text-shadow:
+    -3px -3px 0 #fff, 3px -3px 0 #fff, -3px 3px 0 #fff, 3px 3px 0 #fff,
+    0 8px 0 #b45309, 0 16px 26px #00000060;
+  animation:countPulse 1s ease-in-out infinite;
+}
+@keyframes countPulse{0%,100%{transform:scale(1) rotate(0deg);}50%{transform:scale(1.1) rotate(-3deg);}}
 
 /* ---------- 손 들기 시작 시퀀스 ---------- */
 .raise-icon{font-size:clamp(2.6rem, 10vmin, 4.5rem);}
